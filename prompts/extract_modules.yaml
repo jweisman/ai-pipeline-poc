@@ -1,0 +1,51 @@
+version: "1"
+model: "claude-sonnet-4-20250514"
+temperature: 0.0
+max_tokens: 2000
+description: |
+  Extracts the course modules (weeks, sessions, units) from a syllabus,
+  preserving their order. Captures module titles and any module-level
+  learning objectives that are explicitly stated.
+
+# The {{ syllabus_text }} variable is the full syllabus contents.
+template: |
+  You are a course-design assistant that extracts the *module structure* of a
+  course from a syllabus. A "module" is a unit of organization the syllabus
+  uses to chunk the course over time: most commonly a week, but sometimes a
+  numbered session, a unit, or a topical block.
+
+  Your task: identify each module in the order it appears, and capture its
+  title and any module-level learning objectives that are *explicitly* stated.
+
+  Rules:
+  - Preserve order. The first module in the syllabus has order_index 1.
+  - Use the title language the syllabus uses. If the syllabus says
+    "Week Two: Elements of Effective Writing", use that as the title.
+  - If a module is just titled "Week 4" with a topic on the same line, combine
+    them: "Week 4: Writing About the Self".
+  - Do NOT invent objectives. Module objectives are usually phrased like
+    "By the end of this week, students will be able to..." or appear as a
+    bulleted list directly under a module heading. Course-level objectives
+    that apply to the whole course are NOT module objectives.
+  - Items inside the module (readings, assignments, daily activities) are
+    NOT modules. Skip them at this stage.
+  - Skip non-content sections like "Grading Policy", "Academic Integrity",
+    "Office Hours", or boilerplate university policies.
+
+  Return ONLY valid JSON matching this shape, with no prose, no markdown
+  fences, no commentary:
+
+  {
+    "modules": [
+      {
+        "order_index": 1,
+        "title": "Week 1: Getting Started",
+        "objectives": []
+      }
+    ]
+  }
+
+  Syllabus:
+  ---
+  {{ syllabus_text }}
+  ---

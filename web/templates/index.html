@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>onCourse — Course Analyzer</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <h1>onCourse</h1>
+    <p class="tagline">Course Analyzer POC — Prefect pipeline + Claude</p>
+  </header>
+
+  <main>
+    <section class="workflow-section">
+      <h2>Pipeline</h2>
+      <div class="workflow" id="workflow">
+        {% for stage in stages %}
+        <div class="stage" data-stage="{{ stage.key }}">
+          <div class="stage-index">{{ loop.index }}</div>
+          <div class="stage-label">{{ stage.label }}</div>
+          <div class="stage-task"><code>{{ stage.task }}</code></div>
+        </div>
+        {% if not loop.last %}<div class="stage-arrow">→</div>{% endif %}
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="picker-section" id="picker-section">
+      <h2>Choose a syllabus</h2>
+      {% if syllabi %}
+      <ul class="syllabi-list">
+        {% for s in syllabi %}
+        <li class="syllabus" data-name="{{ s.name }}">
+          <div class="syllabus-meta">
+            <div class="syllabus-name">{{ s.name }}</div>
+            <div class="syllabus-size">{{ s.size_bytes }} bytes</div>
+          </div>
+          <div class="syllabus-preview">{{ s.preview }}…</div>
+          <button class="btn analyze-btn" data-name="{{ s.name }}">Analyze</button>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="empty">No syllabi found in <code>syllabi/</code>.</p>
+      {% endif %}
+    </section>
+
+    <section class="running-section hidden" id="running-section">
+      <h2>Running <code id="running-syllabus"></code></h2>
+      <div class="progress-wrap">
+        <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+        <div class="progress-label" id="progress-label">Starting…</div>
+      </div>
+      <div class="log-feed" id="log-feed" aria-live="polite"></div>
+    </section>
+
+    <section class="error-section hidden" id="error-section">
+      <h2>Run failed</h2>
+      <pre class="error-message" id="error-message"></pre>
+      <button class="btn" id="error-back">Back to syllabi</button>
+    </section>
+
+    <section class="result-section hidden" id="result-section">
+      <div class="result-toolbar">
+        <h2>Result</h2>
+        <div>
+          <a class="btn ghost" id="download-json" href="#" download>Download JSON</a>
+          <button class="btn" id="result-back">Analyze another</button>
+        </div>
+      </div>
+      <div id="result-body"></div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

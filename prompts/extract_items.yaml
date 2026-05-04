@@ -1,0 +1,110 @@
+version: "1"
+model: "claude-sonnet-4-20250514"
+temperature: 0.0
+max_tokens: 4000
+description: |
+  Extracts instructional materials and assignments from a syllabus, normalizes
+  them into a uniform structure, and associates each one with the module
+  (already extracted in the previous step) it belongs to. Order is preserved.
+
+# Variables expected in render context:
+#   syllabus_text: full syllabus
+#   modules_json: JSON-serialized list of {order_index, title} for the modules
+#                 already extracted in stage 1
+template: |
+  You are a course-design assistant that extracts the instructional materials
+  (things students read, watch, or listen to) and assignments (things students
+  produce or submit) from a syllabus.
+
+  The course has already been segmented into modules. Here are the modules in
+  order:
+
+  {{ modules_json }}
+
+  Your task: identify every instructional material and every assignment in the
+  syllabus, normalize them into a uniform structure, and associate each one
+  with the correct module by its order_index.
+
+  What counts as a MATERIAL:
+  - A required or recommended reading (book, chapter, article, essay)
+  - A video, film, or recorded lecture
+  - A podcast or audio
+  - A specific website or resource the student is directed to consume
+  - A required textbook used across the course (associate with the first module
+    it's used in, or leave module unassigned if it's a course-wide text)
+
+  What counts as an ASSIGNMENT:
+  - Anything graded that the student produces: essays, papers, quizzes, exams,
+    presentations, projects, discussion posts, journals, memos
+  - In-class activities that are explicitly named and scored
+  - Drafts that are submitted (count "first draft" and "final draft" as
+    separate assignments only if both are explicitly listed and graded)
+
+  What does NOT count (skip these):
+  - Generic activity descriptions like "discussion of paragraph structure"
+    that are not graded items in themselves
+  - Course policies, rubric descriptions, attendance rules
+  - Course-level learning outcomes
+  - Office hours, instructor info
+
+  Module association rules:
+  - If the item appears under a specific module/week heading, set
+    module_order_index to that module's order_index.
+  - If an item is genuinely course-level and not tied to any module (e.g.,
+    a semester-long research proposal due at the end, a final exam not
+    associated with a specific week), set module_order_index to null.
+  - When in doubt, prefer null over guessing.
+
+  Order:
+  - order_index is the 1-based position of the item in the course as it
+    appears in the syllabus, across ALL items (materials + assignments
+    interleaved). The first item the student encounters in the course
+    has order_index 1.
+
+  Field rules:
+  - For materials: set material_format to one of "reading", "video",
+    "podcast", "website", "other". Leave assignment_format, points, due
+    as null.
+  - For assignments: set assignment_format to a short label like "essay",
+    "quiz", "discussion post", "presentation", "project", "memo". Set
+    points and due if stated. Leave material_format and citation as null.
+  - For citations: capture the full citation if available, otherwise the
+    closest approximation the syllabus provides.
+  - Do not invent fields. Use null when information is not stated.
+
+  Return ONLY valid JSON matching this shape, with no prose, no markdown
+  fences, no commentary:
+
+  {
+    "items": [
+      {
+        "order_index": 1,
+        "item_type": "material",
+        "title": "The Curious Case of Nicki Minaj",
+        "description": null,
+        "module_order_index": 1,
+        "material_format": "reading",
+        "citation": "The Curious Case of Nicki Minaj",
+        "assignment_format": null,
+        "points": null,
+        "due": null
+      },
+      {
+        "order_index": 2,
+        "item_type": "assignment",
+        "title": "100-word Personal Biography",
+        "description": null,
+        "module_order_index": 1,
+        "material_format": null,
+        "citation": null,
+        "assignment_format": "biography",
+        "points": 5,
+        "due": "Friday April 5, 11:55 pm"
+      }
+    ]
+  }
+
+  Syllabus:
+  ---
+  {{ syllabus_text }}
+  ---
