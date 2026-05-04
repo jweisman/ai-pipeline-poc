@@ -34,6 +34,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 from fastapi.templating import Jinja2Templates  # noqa: E402
 
 from flows.course_analyzer import course_analyzer  # noqa: E402
+from flows.stage_events import stage_sink  # noqa: E402
 
 
 SYLLABI_DIR = ROOT / "syllabi"
@@ -46,6 +47,9 @@ templates = Jinja2Templates(directory=WEB_DIR / "templates")
 
 # ---------------------------------------------------------------------------
 # Pipeline stages — kept in sync with flows/course_analyzer.py
+#
+# Stage keys must match the strings the flow passes to emit_stage(...).
+# This list defines the canonical UI ordering and labels.
 # ---------------------------------------------------------------------------
 
 STAGES = [
@@ -55,31 +59,6 @@ STAGES = [
     {"key": "assemble", "label": "Assemble", "task": "assemble"},
     {"key": "write", "label": "Write JSON", "task": "write_output"},
 ]
-
-
-def _detect_stage(record: logging.LogRecord) -> Optional[str]:
-    """
-    Best-effort mapping from a log record to a pipeline stage. Prefect's task
-    loggers are named like 'prefect.task_runs.extract_modules-...'; outside
-    a Prefect context, our fallback logger is 'course_analyzer' and we use
-    the message to disambiguate.
-    """
-    name = record.name.lower()
-    msg = record.getMessage().lower()
-    for stage in STAGES:
-        if stage["task"] in name:
-            return stage["key"]
-    if "course-info" in msg or "extracted course info" in msg:
-        return "course_info"
-    if "module extraction" in msg or "extracted" in msg and "modules" in msg:
-        return "modules"
-    if "item extraction" in msg or "items (" in msg:
-        return "items"
-    if "assembled course" in msg:
-        return "assemble"
-    if "wrote output" in msg:
-        return "write"
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +99,6 @@ class _QueueLogHandler(logging.Handler):
                 "level": record.levelname,
                 "logger": record.name,
                 "message": msg,
-                "stage": _detect_stage(record),
             }
         )
 
@@ -134,15 +112,29 @@ def _run_flow(state: RunState, syllabus_path: Path) -> None:
     if prior_level > logging.INFO or prior_level == logging.NOTSET:
         root_logger.setLevel(logging.INFO)
 
+    def stage_callback(stage: str, phase: str, payload: Optional[dict]) -> None:
+        state.events.put(
+            {
+                "type": "stage",
+                "stage": stage,
+                "phase": phase,
+                "payload": payload,
+            }
+        )
+
     try:
         state.status = "running"
         state.events.put({"type": "status", "status": "running"})
 
-        result = course_analyzer(str(syllabus_path))
+        with stage_sink(stage_callback):
+            result = course_analyzer(str(syllabus_path))
         state.result = json.loads(result.model_dump_json())
         state.status = "done"
-        state.events.put({"type": "result", "data": state.result})
+        # Send status before result. The frontend closes the SSE stream as
+        # soon as it receives `result`, so any event after it would be
+        # dropped — and we want markAllDone() to fire on the client first.
         state.events.put({"type": "status", "status": "done"})
+        state.events.put({"type": "result", "data": state.result})
 
     except Exception as e:
         state.error = f"{type(e).__name__}: {e}"

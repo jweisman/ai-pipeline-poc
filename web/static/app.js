@@ -33,22 +33,36 @@ function showOnly(section) {
 
 function resetWorkflow() {
   for (const stage of els.workflow.querySelectorAll(".stage")) {
-    stage.classList.remove("active", "done");
+    stage.classList.remove("active", "done", "failed");
   }
 }
 
-function setActiveStage(stageKey) {
+function applyStageEvent(stageKey, phase) {
   if (!stageKey) return;
   const idx = STAGE_KEYS.indexOf(stageKey);
   if (idx < 0) return;
-  for (let i = 0; i < STAGE_KEYS.length; i++) {
-    const el = els.workflow.querySelector(`.stage[data-stage="${STAGE_KEYS[i]}"]`);
-    if (!el) continue;
+  const el = els.workflow.querySelector(`.stage[data-stage="${stageKey}"]`);
+  if (!el) return;
+
+  if (phase === "start") {
+    // Mark every earlier stage as done — handles the case where we somehow
+    // missed a "complete" event.
+    for (let i = 0; i < idx; i++) {
+      const e = els.workflow.querySelector(`.stage[data-stage="${STAGE_KEYS[i]}"]`);
+      if (e) { e.classList.remove("active"); e.classList.add("done"); }
+    }
+    el.classList.remove("done", "failed");
+    el.classList.add("active");
+    els.progressFill.style.width = `${(idx / STAGE_KEYS.length) * 100}%`;
+    els.progressLabel.textContent = stageLabel(stageKey);
+  } else if (phase === "complete") {
+    el.classList.remove("active");
+    el.classList.add("done");
+    els.progressFill.style.width = `${((idx + 1) / STAGE_KEYS.length) * 100}%`;
+  } else if (phase === "error") {
     el.classList.remove("active", "done");
-    if (i < idx) el.classList.add("done");
-    if (i === idx) el.classList.add("active");
+    el.classList.add("failed");
   }
-  els.progressFill.style.width = `${((idx + 1) / STAGE_KEYS.length) * 100}%`;
 }
 
 function markAllDone() {
@@ -125,10 +139,8 @@ async function startRun(syllabusName) {
 function handleEvent(event, runId) {
   if (event.type === "log") {
     appendLog(event.message, event.level);
-    if (event.stage) {
-      setActiveStage(event.stage);
-      els.progressLabel.textContent = stageLabel(event.stage);
-    }
+  } else if (event.type === "stage") {
+    applyStageEvent(event.stage, event.phase);
   } else if (event.type === "status") {
     if (event.status === "done") {
       markAllDone();
@@ -160,6 +172,10 @@ function showError(message) {
 
 function renderResult(data, runId) {
   if (activeSource) { activeSource.close(); activeSource = null; }
+  // The presence of a result is itself proof every stage succeeded — make
+  // sure the diagram reflects that, even if the final stage's "complete"
+  // event was somehow missed.
+  markAllDone();
   els.resultBody.innerHTML = "";
 
   els.resultBody.appendChild(renderCourseCard(data.course_info, data.source_filename));

@@ -33,6 +33,7 @@ from prefect.exceptions import MissingContextError  # noqa: E402
 
 from flows.ai_client import run_prompt  # noqa: E402
 from flows.prompts import render_prompt  # noqa: E402
+from flows.stage_events import emit_on_failure, emit_stage  # noqa: E402
 from schemas.models import (  # noqa: E402
     CourseExtraction,
     CourseInfo,
@@ -65,6 +66,7 @@ def extract_course_info(syllabus_text: str) -> CourseInfo:
     Stage 0. Pull course-level metadata (title, code, department, level,
     instructors, description, course-level objectives) from the syllabus.
     """
+    emit_stage("course_info", "start")
     logger = _logger()
 
     rendered, config = render_prompt(
@@ -91,6 +93,16 @@ def extract_course_info(syllabus_text: str) -> CourseInfo:
         len(parsed.objectives),
         len(parsed.instructors),
     )
+    emit_stage(
+        "course_info",
+        "complete",
+        {
+            "title": parsed.title,
+            "code": parsed.code,
+            "objectives": len(parsed.objectives),
+            "instructors": len(parsed.instructors),
+        },
+    )
     return parsed
 
 
@@ -100,6 +112,7 @@ def extract_modules(syllabus_text: str) -> list[Module]:
     Stage 1. Identify modules in order, capturing title + any explicit
     module-level objectives.
     """
+    emit_stage("modules", "start")
     logger = _logger()
 
     rendered, config = render_prompt(
@@ -124,6 +137,7 @@ def extract_modules(syllabus_text: str) -> list[Module]:
     logger.info("Extracted %d modules", len(parsed.modules))
     for m in parsed.modules:
         logger.info("  Module %d: %s", m.order_index, m.title)
+    emit_stage("modules", "complete", {"count": len(parsed.modules)})
     return parsed.modules
 
 
@@ -135,6 +149,7 @@ def extract_items(
     Stage 2. Identify all materials and assignments, associating each with
     the module from stage 1 that it belongs to.
     """
+    emit_stage("items", "start")
     logger = _logger()
 
     # Pass the module list as compact JSON the prompt can reference
@@ -170,6 +185,15 @@ def extract_items(
         n_materials,
         n_assignments,
     )
+    emit_stage(
+        "items",
+        "complete",
+        {
+            "total": len(parsed.items),
+            "materials": n_materials,
+            "assignments": n_assignments,
+        },
+    )
     return parsed.items
 
 
@@ -188,6 +212,7 @@ def assemble(
     belong to any module are surfaced under unassigned_items rather than
     silently dropped.
     """
+    emit_stage("assemble", "start")
     logger = _logger()
 
     # Sort modules by their order so output is stable
@@ -237,18 +262,28 @@ def assemble(
         len(result.modules),
         len(result.unassigned_items),
     )
+    emit_stage(
+        "assemble",
+        "complete",
+        {
+            "modules": len(result.modules),
+            "unassigned": len(result.unassigned_items),
+        },
+    )
     return result
 
 
 @task(name="write_output")
 def write_output(result: CourseExtraction, out_dir: Path) -> Path:
     """Write the result to disk as JSON. Returns the path written."""
+    emit_stage("write", "start")
     logger = _logger()
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = Path(result.source_filename).stem
     out_path = out_dir / f"{stem}.extracted.json"
     out_path.write_text(result.model_dump_json(indent=2))
     logger.info("Wrote output: %s", out_path)
+    emit_stage("write", "complete", {"path": str(out_path)})
     return out_path
 
 
@@ -278,13 +313,18 @@ def course_analyzer(syllabus_path: str) -> CourseExtraction:
         "Starting analysis: file=%s (%d chars)", path.name, len(syllabus_text)
     )
 
-    course_info = extract_course_info(syllabus_text)
-    modules = extract_modules(syllabus_text)
-    items = extract_items(syllabus_text, modules)
-    result = assemble(path.name, course_info, modules, items)
+    with emit_on_failure("course_info"):
+        course_info = extract_course_info(syllabus_text)
+    with emit_on_failure("modules"):
+        modules = extract_modules(syllabus_text)
+    with emit_on_failure("items"):
+        items = extract_items(syllabus_text, modules)
+    with emit_on_failure("assemble"):
+        result = assemble(path.name, course_info, modules, items)
 
     output_dir = Path(__file__).resolve().parent.parent / "output"
-    write_output(result, output_dir)
+    with emit_on_failure("write"):
+        write_output(result, output_dir)
 
     return result
 

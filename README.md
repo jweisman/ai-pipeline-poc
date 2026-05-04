@@ -1,7 +1,6 @@
 # onCourse — Course Analyzer POC (Prefect)
 
-A working Prefect pipeline that demonstrates the encapsulated AI architecture
-we discussed: Prefect orchestrates a sequence of LLM calls, prompts live as
+A working Prefect pipeline that demonstrates an  encapsulated AI architecture: Prefect orchestrates a sequence of LLM calls, prompts live as
 versioned YAML files, data flows between tasks as typed Pydantic models,
 and the result is a single structured JSON document.
 
@@ -15,7 +14,8 @@ oncourse-poc/
 ├── flows/
 │   ├── course_analyzer.py        # The Prefect flow itself (4 tasks)
 │   ├── prompts.py                # YAML loader + Jinja2 renderer
-│   └── ai_client.py              # Thin wrapper around the LLM (swap for AGAI later)
+│   ├── ai_client.py              # Thin wrapper around the LLM (swap for AGAI later)
+│   └── stage_events.py           # Lightweight progress hook for the web UI
 ├── web/
 │   ├── app.py                    # FastAPI server: index, /runs, SSE event stream
 │   ├── templates/index.html      # Single-page UI
@@ -119,6 +119,16 @@ What you get:
 - Result page rendering: course-info card (title, code, level, instructors,
   term, description, course objectives), then each module with its items
   in a clean table, then unassigned items if any.
+
+How progress works: each task emits explicit `stage:start` / `stage:complete`
+events through `flows/stage_events.py` (a `ContextVar`-scoped sink), and
+the flow function wraps each task call in `emit_on_failure(...)` so a
+single `stage:error` event is emitted on terminal failure (after retries
+are exhausted). The web layer installs a sink that translates these into
+SSE messages, so the diagram is driven by the flow itself rather than by
+string-matching on log lines. Any other consumer (the real onCourse app,
+a CLI wrapper, a test harness) gets the same start/complete/error contract
+for free. Outside any sink (CLI runs, unit tests) the emits are no-ops.
 
 This is a single-process POC: the flow runs in a background thread inside
 the same Python process as the web server. Concurrent runs are intentionally

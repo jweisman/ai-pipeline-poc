@@ -120,6 +120,20 @@ section h2 {
   color: var(--ok);
   font-weight: 700;
 }
+.stage.failed {
+  background: #fff1f0;
+  border-color: #f1c0bd;
+  box-shadow: 0 0 0 3px rgba(179, 38, 30, 0.10);
+}
+.stage.failed .stage-label { color: var(--err); }
+.stage.failed::after {
+  content: "✗";
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  color: var(--err);
+  font-weight: 700;
+}
 .stage-arrow {
   color: var(--muted);
   font-size: 18px;
