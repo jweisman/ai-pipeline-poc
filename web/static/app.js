@@ -52,14 +52,15 @@ const backendState = {
   backend: localStorage.getItem(BACKEND_KEY)
     || els.backendSection.dataset.defaultBackend
     || "anthropic",
-  // Per-backend cache of which model the user picked, plus whether we've
-  // already fetched the model list this session.
+  // Per-backend cache of which model the user picked.
   selectedModel: {
     anthropic: localStorage.getItem(modelKey("anthropic")) || "",
     openai: localStorage.getItem(modelKey("openai")) || "",
     agai: localStorage.getItem(modelKey("agai")) || "",
   },
-  modelsLoaded: { anthropic: false, openai: false, agai: false },
+  // Per-backend cache of the model list fetched from the provider.
+  // null = not fetched yet for this backend.
+  cachedModels: { anthropic: null, openai: null, agai: null },
 };
 
 function setBackend(backend, { persist = true } = {}) {
@@ -75,17 +76,14 @@ function setBackend(backend, { persist = true } = {}) {
   const usesSelector = MODEL_BACKENDS.has(backend);
   els.modelRow.classList.toggle("hidden", !usesSelector);
   if (usesSelector) {
-    if (!backendState.modelsLoaded[backend]) {
-      loadModels(backend);
+    const cached = backendState.cachedModels[backend];
+    if (cached) {
+      populateModelSelect(backend, cached);
     } else {
-      // Re-render so the dropdown reflects the per-backend selection.
-      // (No-op if already rendered for this backend; cheap enough to redo.)
-      renderCurrentBackendModels();
+      loadModels(backend);
     }
   }
 }
-
-let lastRendered = { backend: null, models: null };
 
 async function loadModels(backend) {
   els.modelHint.textContent = "";
@@ -103,9 +101,11 @@ async function loadModels(backend) {
     }
     const data = await res.json();
     const models = data.models || [];
-    backendState.modelsLoaded[backend] = true;
-    lastRendered = { backend, models };
-    populateModelSelect(backend, models);
+    backendState.cachedModels[backend] = models;
+    // Only render if the user hasn't switched away while we were fetching.
+    if (backendState.backend === backend) {
+      populateModelSelect(backend, models);
+    }
   } catch (e) {
     els.modelSelect.innerHTML = "";
     const opt = document.createElement("option");
@@ -113,12 +113,6 @@ async function loadModels(backend) {
     opt.textContent = `(failed to load ${backend} models)`;
     els.modelSelect.appendChild(opt);
     els.modelHint.textContent = String(e.message || e);
-  }
-}
-
-function renderCurrentBackendModels() {
-  if (lastRendered.backend === backendState.backend && lastRendered.models) {
-    populateModelSelect(lastRendered.backend, lastRendered.models);
   }
 }
 

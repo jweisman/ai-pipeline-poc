@@ -75,13 +75,12 @@ def extract_course_info(syllabus_text: str, ai_config: AIConfig) -> CourseInfo:
     logger.info(
         "Calling LLM for course-info extraction: backend=%s, model=%s, prompt_chars=%d",
         ai_config.backend,
-        resolve_model(ai_config, config.model),
+        resolve_model(ai_config),
         len(rendered),
     )
 
     raw = run_prompt(
         prompt=rendered,
-        model=config.model,
         temperature=config.temperature,
         max_tokens=config.max_tokens,
         config=ai_config,
@@ -123,13 +122,12 @@ def extract_modules(syllabus_text: str, ai_config: AIConfig) -> list[Module]:
     logger.info(
         "Calling LLM for module extraction: backend=%s, model=%s, prompt_chars=%d",
         ai_config.backend,
-        resolve_model(ai_config, config.model),
+        resolve_model(ai_config),
         len(rendered),
     )
 
     raw = run_prompt(
         prompt=rendered,
-        model=config.model,
         temperature=config.temperature,
         max_tokens=config.max_tokens,
         config=ai_config,
@@ -170,13 +168,12 @@ def extract_items(
     logger.info(
         "Calling LLM for item extraction: backend=%s, model=%s, prompt_chars=%d",
         ai_config.backend,
-        resolve_model(ai_config, config.model),
+        resolve_model(ai_config),
         len(rendered),
     )
 
     raw = run_prompt(
         prompt=rendered,
-        model=config.model,
         temperature=config.temperature,
         max_tokens=config.max_tokens,
         config=ai_config,

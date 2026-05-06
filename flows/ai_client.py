@@ -3,9 +3,9 @@ Thin client for whatever LLM backend we're talking to.
 
 Three backends are supported. All three accept a per-run model override
 from the UI selector; without an override the backend falls back to its
-*_DEFAULT_MODEL env var, then to the prompt YAML's `model:` (anthropic
-only — that field names a Claude model and isn't applicable to the
-others), then to a hardcoded default.
+*_DEFAULT_MODEL env var, then to a backend-specific hardcoded default.
+Prompt YAMLs no longer carry a `model:` field — model selection lives
+entirely in this module across all backends.
 
   - "anthropic": calls the public Anthropic API via the anthropic SDK.
   - "openai": calls the public OpenAI API via the openai SDK.
@@ -34,10 +34,13 @@ task boundaries with full Prefect observability.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass
 from typing import Any, Literal
+
+logger = logging.getLogger(__name__)
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -161,6 +164,14 @@ def _run_anthropic(
         temperature=temperature,
         messages=[{"role": "user", "content": prompt}],
     )
+    if response.stop_reason == "max_tokens":
+        logger.warning(
+            "Anthropic stop_reason=max_tokens (output_tokens=%d, cap=%d) for model=%r. "
+            "Response may be truncated or stop early; consider raising max_tokens.",
+            response.usage.output_tokens,
+            max_tokens,
+            model,
+        )
     text_parts = [
         block.text for block in response.content if getattr(block, "type", None) == "text"
     ]
@@ -193,7 +204,17 @@ def _run_openai(
     if not _is_openai_reasoning_model(model):
         kwargs["temperature"] = temperature
     response = client.chat.completions.create(**kwargs)
-    return response.choices[0].message.content or ""
+    choice = response.choices[0]
+    if choice.finish_reason == "length":
+        completion_tokens = getattr(response.usage, "completion_tokens", None)
+        logger.warning(
+            "OpenAI finish_reason=length (completion_tokens=%s, cap=%d) for model=%r. "
+            "Response may be truncated or stop early; consider raising max_tokens.",
+            completion_tokens,
+            max_tokens,
+            model,
+        )
+    return choice.message.content or ""
 
 
 def _run_agai(
@@ -224,6 +245,15 @@ def _run_agai(
             f"results[0] keys={list(results[0].keys())!r}, "
             f"results[0]={results[0]!r}"
         )
+    output_tokens = results[0].get("output_tokens")
+    if output_tokens is not None and output_tokens >= max_tokens:
+        logger.warning(
+            "AGAI output_tokens (%d) hit max_tokens cap (%d) for model=%r. "
+            "Response may be truncated or stop early; consider raising max_tokens.",
+            output_tokens,
+            max_tokens,
+            model,
+        )
     return completion
 
 
@@ -232,55 +262,54 @@ def _run_agai(
 # ---------------------------------------------------------------------------
 
 
-def resolve_model(config: AIConfig, prompt_model: str) -> str:
+_ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-20250514"
+_OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
+_AGAI_DEFAULT_MODEL = "gpt_4o"
+
+
+def resolve_model(config: AIConfig) -> str:
     """Decide which model name to send to the backend.
 
     All three backends use the same precedence: UI selector wins, then the
-    backend's *_DEFAULT_MODEL env var, then a backend-specific final
-    fallback. For anthropic, the prompt YAML's `model:` is treated as that
-    final fallback (it names a Claude model so it actually applies); for
-    openai/agai it's irrelevant and ignored.
+    backend's *_DEFAULT_MODEL env var, then a backend-specific hardcoded
+    final fallback.
     """
     if config.backend == "anthropic":
         return (
             config.model_override
             or os.environ.get("ANTHROPIC_DEFAULT_MODEL")
-            or prompt_model
+            or _ANTHROPIC_DEFAULT_MODEL
         )
     if config.backend == "openai":
         return (
             config.model_override
             or os.environ.get("OPENAI_DEFAULT_MODEL")
-            or "gpt-4o-mini"
+            or _OPENAI_DEFAULT_MODEL
         )
     # agai
     return (
         config.model_override
         or os.environ.get("AGAI_DEFAULT_MODEL")
-        or "gpt_4o"
+        or _AGAI_DEFAULT_MODEL
     )
 
 
 def run_prompt(
     *,
     prompt: str,
-    model: str,
     temperature: float,
     max_tokens: int,
     config: AIConfig | None = None,
 ) -> dict[str, Any]:
     """
     Send a single-shot prompt to the configured LLM backend and parse the
-    response as JSON.
-
-    `model` is the prompt's declared model (from YAML). The active backend
-    decides whether to honor it (anthropic) or substitute via resolve_model().
+    response as JSON. The model is chosen by resolve_model().
 
     Raises ValueError if the response isn't parseable as JSON. We let that
     propagate up to the Prefect task so the failure is visible in the run UI.
     """
     cfg = config or default_config()
-    effective_model = resolve_model(cfg, model)
+    effective_model = resolve_model(cfg)
 
     if cfg.backend == "anthropic":
         raw = _run_anthropic(

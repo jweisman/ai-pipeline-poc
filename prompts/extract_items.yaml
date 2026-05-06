@@ -1,7 +1,6 @@
 version: "1"
-model: "claude-sonnet-4-20250514"
 temperature: 0.0
-max_tokens: 4000
+max_tokens: 12000
 description: |
   Extracts instructional materials and assignments from a syllabus, normalizes
   them into a uniform structure, and associates each one with the module

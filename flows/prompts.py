@@ -23,28 +23,36 @@ PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
 class PromptConfig(BaseModel):
     version: str
-    model: str
     temperature: float
     max_tokens: int
     description: str
     template: str
 
 
-@lru_cache(maxsize=32)
-def _load_raw(name: str) -> PromptConfig:
+@lru_cache(maxsize=64)
+def _load_raw(name: str, prompts_dir: Path = PROMPTS_DIR) -> PromptConfig:
     """Load and parse the YAML once per process; the rendered text changes
     per call but the static fields don't."""
-    path = PROMPTS_DIR / f"{name}.yaml"
+    path = prompts_dir / f"{name}.yaml"
     if not path.exists():
         raise FileNotFoundError(f"Prompt file not found: {path}")
     return PromptConfig(**yaml.safe_load(path.read_text()))
 
 
-def render_prompt(name: str, **context: Any) -> tuple[str, PromptConfig]:
+def render_prompt(
+    name: str,
+    *,
+    prompts_dir: Path | None = None,
+    **context: Any,
+) -> tuple[str, PromptConfig]:
     """
     Load prompt `name` (without .yaml extension) and render its template
     against the given context. Returns (rendered_text, config).
+
+    `prompts_dir` lets sibling pipelines (e.g. qc/) keep their own prompt
+    directory without shoehorning files into the main `prompts/` tree.
+    Defaults to the main pipeline's prompts directory.
     """
-    config = _load_raw(name)
+    config = _load_raw(name, prompts_dir or PROMPTS_DIR)
     rendered = Template(config.template).render(**context)
     return rendered, config
