@@ -11,8 +11,7 @@ The LLM backend is selectable per run. Three options, all with a live
 model dropdown sourced from each provider's API:
 
 - **Anthropic** (default) — public Anthropic API. Models listed live via
-  `client.models.list()`. UI selection overrides the prompt YAML's
-  `model:` for the run.
+  `client.models.list()`. UI selection overrides the per-backend defaults.
 - **OpenAI** — public OpenAI API. Chat-capable models listed live via
   `client.models.list()`, filtered server-side.
 - **AGAI Platform** — Clarivate's internal LLM gateway, hit via its
@@ -37,6 +36,14 @@ ai-pipeline-poc/
 │   ├── extract_course_info.yaml  # Stage 0 prompt (course-level metadata)
 │   ├── extract_modules.yaml      # Stage 1 prompt
 │   └── extract_items.yaml        # Stage 2 prompt
+├── qc/
+│   ├── schemas.py            # QCCheckResult, JudgeResult, QCReport
+│   ├── checks.py             # Deterministic checks over CourseExtraction
+│   ├── judge.py              # LLM-as-judge wrapper (reuses flows/ai_client.py)
+│   ├── report.py             # Status rollup + qc_output/ writers
+│   └── qc_flow.py            # Prefect flow: qc_one / qc_all
+├── qc_prompts/
+│   └── judge_extraction.yaml # LLM-as-judge prompt (faithfulness audit)
 ├── schemas/
 │   └── models.py             # Pydantic data contracts
 ├── syllabi/
@@ -44,8 +51,10 @@ ai-pipeline-poc/
 │   └── ubc_comm663.txt       # Real syllabus #2 (UBC marketing PhD course)
 ├── tests/
 │   ├── test_prompts.py       # Verifies prompt rendering
-│   └── test_assemble.py      # Verifies deterministic assembly logic
-├── output/                   # Generated JSON results land here
+│   ├── test_assemble.py      # Verifies deterministic assembly logic
+│   └── test_qc_checks.py     # Verifies QC deterministic checks + rollup
+├── output/                   # Generated extraction JSON lands here
+├── qc_output/                # Generated QC reports + HITL review tasks land here
 └── requirements.txt
 ```
 
@@ -171,14 +180,85 @@ This is a single-process POC: the flow runs in a background thread inside
 the same Python process as the web server. Concurrent runs are intentionally
 blocked (HTTP 409); the UI is single-user.
 
+## QC pipeline (evals + LLM-as-judge + HITL)
+
+A second Prefect flow under `qc/` audits extractions produced by the
+main pipeline. It runs over `output/*.extracted.json` and writes its
+own artifacts to `qc_output/`. Two complementary signals:
+
+- **Deterministic checks** (`qc/checks.py`) — pure-function checks over
+  a `CourseExtraction`: required fields populated, module ordering
+  unique and contiguous, item-type/format consistency
+  (materials carry `material_format`, assignments don't carry
+  `citation`), no duplicate item titles within a module, etc. No LLM,
+  free, runs every time.
+- **LLM-as-judge** (`qc/judge.py` + `qc_prompts/judge_extraction.yaml`)
+  — one LLM call that compares the extraction against the source
+  syllabus for faithfulness, completeness, and correct categorization.
+  Reuses the same backend dispatcher as the main pipeline, so the
+  Anthropic / OpenAI / AGAI selection works identically.
+
+The two streams roll up into a `QCReport` with:
+
+- `overall_status` ∈ `pass` / `warn` / `fail`
+- `needs_human_review` (true whenever overall is not `pass`)
+- `fields_flagged` — deduped list of dotted paths into the extraction
+  (e.g. `modules[2].items[0].material_format`).
+
+Outputs:
+
+- `qc_output/<stem>.qc.json` — always written.
+- `qc_output/<stem>.review.json` — written when
+  `needs_human_review`. This is a stub HITL (human-in-the-loop)
+  review-task record with placeholder `assigned_to`, `decision`,
+  `decided_at`, `notes` fields. The shape is the contract a real
+  review queue / UI would consume; the queue itself is a later phase.
+
+```
+output/foo.extracted.json
+        │
+        ▼
+┌────────────────────────────┐
+│ run_deterministic_checks   │  ── pure Python ──▶  list[QCCheckResult]
+└────────────────────────────┘
+        │
+        ▼
+┌────────────────────────────┐
+│ run_judge                  │  ── LLM call ─────▶  JudgeResult
+└────────────────────────────┘  (skipped with --no-judge,
+        │                       or if syllabus not found)
+        ▼
+┌────────────────────────────┐
+│ build_report + write_qc    │  ── pure Python ──▶  qc_output/foo.qc.json
+└────────────────────────────┘                      qc_output/foo.review.json (if review needed)
+```
+
+Run it:
+
+```bash
+# QC every output/*.extracted.json
+python -m qc.qc_flow
+
+# QC just one
+python -m qc.qc_flow output/bellevue_engl101.extracted.json
+
+# Skip the LLM judge (free, fast — only deterministic checks)
+python -m qc.qc_flow --no-judge
+```
+
+The QC flow uses the same `AI_BACKEND` / `*_DEFAULT_MODEL` env vars as
+the main pipeline. To add a new deterministic check, write a
+`_check_*` function in `qc/checks.py` and append it to `ALL_CHECKS`.
+
 ## Run the tests (no API key required)
 
 ```bash
 pytest tests/
 ```
 
-These tests cover prompt rendering and the assembly logic without ever
-hitting the LLM. They run in well under a second and can sit in CI.
+These tests cover prompt rendering, the assembly logic, and the QC
+deterministic checks + rollup without ever hitting the LLM. They run in
+well under a second and can sit in CI.
 
 ## Trying it through the Prefect UI
 
@@ -219,10 +299,13 @@ understanding), the rest is deterministic stitching. No LLM call needed
 for "group items by module and sort by order_index" — and no LLM
 non-determinism creeping into output we can compute exactly.
 
-**Prompts as versioned YAML.** The `version` field, `model`, `temperature`,
-and `max_tokens` are co-located with the prompt text. When we move to
-production we can either keep this in Git (current setup) or move it to a
-prompt registry (only `flows/prompts.py` changes).
+**Prompts as versioned YAML.** The `version` field, `temperature`, and
+`max_tokens` are co-located with the prompt text. Model selection is
+deliberately *not* in the YAML — it's a per-backend concern handled in
+`flows/ai_client.py` (UI selector → `*_DEFAULT_MODEL` env var → hardcoded
+fallback). When we move to production we can either keep this in Git
+(current setup) or move it to a prompt registry (only `flows/prompts.py`
+changes).
 
 **Backends are pluggable.** `flows/ai_client.py` dispatches on an
 `AIConfig.backend` value (`anthropic` | `openai` | `agai`) that the flow
@@ -237,9 +320,9 @@ family-restricted: the Anthropic-compatible one rejects every model AGAI
 actually has ("Model X is not an Anthropic model"), and the
 OpenAI-compatible one 500s for `llama_32_instruct_90b` and other
 non-OpenAI models. The native endpoint accepts every model the listing
-returns, so we use that. When OpenAI or AGAI is selected, prompt YAML's
-`model:` is ignored and the runtime model comes from the UI selector
-(falling back to the relevant `*_DEFAULT_MODEL` env var).
+returns, so we use that. The runtime model comes from the UI selector,
+falling back to the relevant `*_DEFAULT_MODEL` env var, then to a
+hardcoded default in `flows/ai_client.py`.
 
 ## Known limitations of the POC
 
@@ -250,5 +333,9 @@ returns, so we use that. When OpenAI or AGAI is selected, prompt YAML's
   natural next iteration.
 - No cost or token tracking yet. For the real pipeline we'd log token
   usage from each response into Prefect task metadata.
-- No evals. Once we have a few golden extractions hand-curated, we can
-  run regression evals against prompt changes.
+- QC is intentionally limited in this phase. The LLM judge is a single
+  generic fidelity pass (no rubric ensembles, no calibration). No golden
+  datasets / partial-expected comparison yet — that lands once we have
+  enough hand-curated extractions for "golden" to be meaningful. The
+  HITL review-task writer produces the record but no queue / UI consumes
+  it yet. The web UI does not yet expose a "Run QC" action.

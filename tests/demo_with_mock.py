@@ -138,7 +138,7 @@ _responses = [MOCK_MODULES_RESPONSE, MOCK_ITEMS_RESPONSE]
 _call_count = [0]
 
 
-def fake_run_prompt(*, prompt, model, temperature, max_tokens):
+def fake_run_prompt(*, prompt, temperature, max_tokens, config=None):
     """Return the next pre-baked response and ignore the prompt."""
     response = _responses[_call_count[0]]
     _call_count[0] += 1

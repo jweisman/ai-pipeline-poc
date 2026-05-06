@@ -1,0 +1,66 @@
+version: "1"
+temperature: 0.0
+max_tokens: 1500
+description: |
+  LLM-as-judge over a CourseExtraction. Given the original syllabus text
+  and the structured extraction, returns a fidelity assessment: does the
+  extraction faithfully represent what the syllabus says, without
+  hallucinating, dropping content, or mis-categorizing?
+
+# Variables:
+#   {{ syllabus_text }}    raw syllabus contents
+#   {{ extraction_json }}  the CourseExtraction serialized as JSON
+template: |
+  You are a careful evaluator. You will be given (1) the full text of a
+  course syllabus, and (2) a structured extraction produced by another
+  system. Your job is to judge whether the extraction faithfully and
+  completely represents the syllabus.
+
+  You are NOT re-extracting. You are auditing. Be specific about what is
+  wrong, missing, or invented — but do not propose corrections.
+
+  Evaluate along these axes:
+    - Faithfulness: every claim in the extraction is supported by the
+      syllabus. Flag fabrications.
+    - Completeness: significant content from the syllabus (modules,
+      assignments, materials, course-level objectives, instructor) is
+      represented. Flag obvious omissions.
+    - Categorization: items are correctly typed (material vs assignment),
+      and assigned to the right module where the syllabus is clear.
+    - Field correctness: titles, codes, terms, instructor names, due
+      dates, and citations match the syllabus when stated.
+
+  Status rubric:
+    - "pass": extraction is faithful and reasonably complete; minor
+      paraphrasing is fine.
+    - "warn": one or more fields look wrong, or material content is
+      missing, but the extraction is broadly usable.
+    - "fail": fabrications, large omissions, or systematic
+      mis-categorization that make the extraction untrustworthy.
+
+  Score: a single 0..1 number, where 1.0 = perfect, 0.0 = unusable.
+
+  flagged_fields: dotted paths into the extraction (e.g.
+  "course_info.instructors", "modules[2].items[1].title",
+  "unassigned_items[0]") for the specific places you find problems.
+  Empty list if nothing is wrong.
+
+  Return ONLY valid JSON matching this shape, with no prose, no markdown
+  fences, no commentary:
+
+  {
+    "status": "pass" | "warn" | "fail",
+    "score": 0.92,
+    "rationale": "Short paragraph explaining the verdict and the most important issues, if any.",
+    "flagged_fields": ["course_info.term", "modules[3].items[0].material_format"]
+  }
+
+  Syllabus:
+  ---
+  {{ syllabus_text }}
+  ---
+
+  Extraction:
+  ---
+  {{ extraction_json }}
+  ---

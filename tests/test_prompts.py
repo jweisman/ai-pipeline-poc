@@ -22,7 +22,6 @@ def test_extract_modules_prompt_includes_syllabus_text():
 
     assert "WEEK 1: Intro" in rendered
     assert "WEEK 2: Foundations" in rendered
-    assert config.model
     assert config.temperature == 0.0
 
 
