@@ -31,7 +31,7 @@ import logging  # noqa: E402
 from prefect import flow, task, get_run_logger  # noqa: E402
 from prefect.exceptions import MissingContextError  # noqa: E402
 
-from flows.ai_client import AIConfig, run_prompt  # noqa: E402
+from flows.ai_client import AIConfig, resolve_model, run_prompt  # noqa: E402
 from flows.prompts import render_prompt  # noqa: E402
 from flows.stage_events import emit_on_failure, emit_stage  # noqa: E402
 from schemas.models import (  # noqa: E402
@@ -75,7 +75,7 @@ def extract_course_info(syllabus_text: str, ai_config: AIConfig) -> CourseInfo:
     logger.info(
         "Calling LLM for course-info extraction: backend=%s, model=%s, prompt_chars=%d",
         ai_config.backend,
-        config.model,
+        resolve_model(ai_config, config.model),
         len(rendered),
     )
 
@@ -123,7 +123,7 @@ def extract_modules(syllabus_text: str, ai_config: AIConfig) -> list[Module]:
     logger.info(
         "Calling LLM for module extraction: backend=%s, model=%s, prompt_chars=%d",
         ai_config.backend,
-        config.model,
+        resolve_model(ai_config, config.model),
         len(rendered),
     )
 
@@ -170,7 +170,7 @@ def extract_items(
     logger.info(
         "Calling LLM for item extraction: backend=%s, model=%s, prompt_chars=%d",
         ai_config.backend,
-        config.model,
+        resolve_model(ai_config, config.model),
         len(rendered),
     )
 

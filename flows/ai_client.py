@@ -217,7 +217,14 @@ def _run_agai(
         raise RuntimeError(
             f"AGAI returned no completions for model={model!r}: {data}"
         )
-    return results[0].get("completion") or ""
+    completion = results[0].get("completion")
+    if not completion:
+        raise RuntimeError(
+            f"AGAI returned an empty/missing completion for model={model!r}. "
+            f"results[0] keys={list(results[0].keys())!r}, "
+            f"results[0]={results[0]!r}"
+        )
+    return completion
 
 
 # ---------------------------------------------------------------------------
