@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>onCourse — Course Analyzer</title>
+  <title>AI Pipeline POC</title>
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
   <header class="site-header">
-    <h1>onCourse</h1>
-    <p class="tagline">Course Analyzer POC — Prefect pipeline + Claude</p>
+    <h1>AI Pipeline</h1>
+    <p class="tagline">Course Analyzer POC — Prefect pipeline · selectable LLM backend</p>
   </header>
 
   <main>
@@ -24,6 +24,28 @@
         </div>
         {% if not loop.last %}<div class="stage-arrow">→</div>{% endif %}
         {% endfor %}
+      </div>
+    </section>
+
+    <section class="backend-section" id="backend-section"
+             data-default-backend="{{ default_backend }}"
+             data-agai-default-model="{{ agai_default_model }}">
+      <h2>Backend</h2>
+      <div class="backend-card">
+        <div class="backend-row">
+          <label class="backend-label">Provider</label>
+          <div class="segmented" role="radiogroup" aria-label="Backend">
+            <button type="button" class="seg-btn" data-backend="anthropic" role="radio">Anthropic (Claude)</button>
+            <button type="button" class="seg-btn" data-backend="agai" role="radio">AGAI Platform</button>
+          </div>
+        </div>
+        <div class="backend-row hidden" id="model-row">
+          <label class="backend-label" for="agai-model">Model</label>
+          <select id="agai-model" class="model-select">
+            <option value="">Loading models…</option>
+          </select>
+          <span class="backend-hint" id="model-hint"></span>
+        </div>
       </div>
     </section>
 

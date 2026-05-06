@@ -17,9 +17,103 @@ const els = {
   resultBody: document.getElementById("result-body"),
   resultBack: document.getElementById("result-back"),
   downloadJson: document.getElementById("download-json"),
+  backendSection: document.getElementById("backend-section"),
+  modelRow: document.getElementById("model-row"),
+  modelSelect: document.getElementById("agai-model"),
+  modelHint: document.getElementById("model-hint"),
 };
 
 let activeSource = null;
+
+// ---------------------------------------------------------------------------
+// Backend selector
+// ---------------------------------------------------------------------------
+
+const BACKEND_KEY = "ai-pipeline-poc.backend";
+const MODEL_KEY = "ai-pipeline-poc.agai_model";
+
+const backendState = {
+  backend: localStorage.getItem(BACKEND_KEY)
+    || els.backendSection.dataset.defaultBackend
+    || "anthropic",
+  agaiModel: localStorage.getItem(MODEL_KEY) || "",
+  modelsLoaded: false,
+};
+
+function setBackend(backend, { persist = true } = {}) {
+  backendState.backend = backend;
+  if (persist) localStorage.setItem(BACKEND_KEY, backend);
+
+  for (const btn of document.querySelectorAll(".seg-btn")) {
+    const active = btn.dataset.backend === backend;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-checked", active ? "true" : "false");
+  }
+  els.modelRow.classList.toggle("hidden", backend !== "agai");
+
+  if (backend === "agai" && !backendState.modelsLoaded) {
+    loadAgaiModels();
+  }
+}
+
+async function loadAgaiModels() {
+  els.modelHint.textContent = "";
+  try {
+    const res = await fetch("/agai/models");
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error(`${res.status}: ${txt}`);
+    }
+    const data = await res.json();
+    const models = data.models || [];
+    backendState.modelsLoaded = true;
+    populateModelSelect(models);
+  } catch (e) {
+    els.modelSelect.innerHTML = "";
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "(failed to load AGAI models)";
+    els.modelSelect.appendChild(opt);
+    els.modelHint.textContent = String(e.message || e);
+  }
+}
+
+function populateModelSelect(models) {
+  els.modelSelect.innerHTML = "";
+  if (!models.length) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "(no models returned)";
+    els.modelSelect.appendChild(opt);
+    return;
+  }
+
+  const fallback = els.backendSection.dataset.agaiDefaultModel || models[0].id;
+  const desired = backendState.agaiModel || fallback;
+
+  for (const m of models) {
+    const opt = document.createElement("option");
+    opt.value = m.id;
+    opt.textContent = m.display ? `${m.display} (${m.id})` : m.id;
+    if (m.id === desired) opt.selected = true;
+    els.modelSelect.appendChild(opt);
+  }
+  // If `desired` wasn't in the list, browser auto-selects index 0; sync state
+  // back so the persisted value reflects what's actually shown.
+  backendState.agaiModel = els.modelSelect.value;
+  localStorage.setItem(MODEL_KEY, backendState.agaiModel);
+}
+
+els.modelSelect.addEventListener("change", () => {
+  backendState.agaiModel = els.modelSelect.value;
+  localStorage.setItem(MODEL_KEY, backendState.agaiModel);
+});
+
+for (const btn of document.querySelectorAll(".seg-btn")) {
+  btn.addEventListener("click", () => setBackend(btn.dataset.backend));
+}
+
+setBackend(backendState.backend, { persist: false });
 
 // ---------------------------------------------------------------------------
 // View transitions
@@ -105,10 +199,14 @@ async function startRun(syllabusName) {
 
   let runId;
   try {
+    const body = { syllabus: syllabusName, backend: backendState.backend };
+    if (backendState.backend === "agai" && backendState.agaiModel) {
+      body.model = backendState.agaiModel;
+    }
     const res = await fetch("/runs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ syllabus: syllabusName }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) {
       const text = await res.text();

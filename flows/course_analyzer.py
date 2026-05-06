@@ -31,7 +31,7 @@ import logging  # noqa: E402
 from prefect import flow, task, get_run_logger  # noqa: E402
 from prefect.exceptions import MissingContextError  # noqa: E402
 
-from flows.ai_client import run_prompt  # noqa: E402
+from flows.ai_client import AIConfig, run_prompt  # noqa: E402
 from flows.prompts import render_prompt  # noqa: E402
 from flows.stage_events import emit_on_failure, emit_stage  # noqa: E402
 from schemas.models import (  # noqa: E402
@@ -61,7 +61,7 @@ def _logger():
 
 
 @task(retries=2, retry_delay_seconds=5, name="extract_course_info")
-def extract_course_info(syllabus_text: str) -> CourseInfo:
+def extract_course_info(syllabus_text: str, ai_config: AIConfig) -> CourseInfo:
     """
     Stage 0. Pull course-level metadata (title, code, department, level,
     instructors, description, course-level objectives) from the syllabus.
@@ -73,7 +73,8 @@ def extract_course_info(syllabus_text: str) -> CourseInfo:
         "extract_course_info", syllabus_text=syllabus_text
     )
     logger.info(
-        "Calling LLM for course-info extraction: model=%s, prompt_chars=%d",
+        "Calling LLM for course-info extraction: backend=%s, model=%s, prompt_chars=%d",
+        ai_config.backend,
         config.model,
         len(rendered),
     )
@@ -83,6 +84,7 @@ def extract_course_info(syllabus_text: str) -> CourseInfo:
         model=config.model,
         temperature=config.temperature,
         max_tokens=config.max_tokens,
+        config=ai_config,
     )
 
     parsed = CourseInfo.model_validate(raw)
@@ -107,7 +109,7 @@ def extract_course_info(syllabus_text: str) -> CourseInfo:
 
 
 @task(retries=2, retry_delay_seconds=5, name="extract_modules")
-def extract_modules(syllabus_text: str) -> list[Module]:
+def extract_modules(syllabus_text: str, ai_config: AIConfig) -> list[Module]:
     """
     Stage 1. Identify modules in order, capturing title + any explicit
     module-level objectives.
@@ -119,7 +121,8 @@ def extract_modules(syllabus_text: str) -> list[Module]:
         "extract_modules", syllabus_text=syllabus_text
     )
     logger.info(
-        "Calling LLM for module extraction: model=%s, prompt_chars=%d",
+        "Calling LLM for module extraction: backend=%s, model=%s, prompt_chars=%d",
+        ai_config.backend,
         config.model,
         len(rendered),
     )
@@ -129,6 +132,7 @@ def extract_modules(syllabus_text: str) -> list[Module]:
         model=config.model,
         temperature=config.temperature,
         max_tokens=config.max_tokens,
+        config=ai_config,
     )
 
     # Validate against schema. If the model returned malformed structure,
@@ -143,7 +147,7 @@ def extract_modules(syllabus_text: str) -> list[Module]:
 
 @task(retries=2, retry_delay_seconds=5, name="extract_items")
 def extract_items(
-    syllabus_text: str, modules: list[Module]
+    syllabus_text: str, modules: list[Module], ai_config: AIConfig
 ) -> list[CourseItem]:
     """
     Stage 2. Identify all materials and assignments, associating each with
@@ -164,7 +168,8 @@ def extract_items(
         modules_json=modules_json,
     )
     logger.info(
-        "Calling LLM for item extraction: model=%s, prompt_chars=%d",
+        "Calling LLM for item extraction: backend=%s, model=%s, prompt_chars=%d",
+        ai_config.backend,
         config.model,
         len(rendered),
     )
@@ -174,6 +179,7 @@ def extract_items(
         model=config.model,
         temperature=config.temperature,
         max_tokens=config.max_tokens,
+        config=ai_config,
     )
 
     parsed = ItemExtraction.model_validate(raw)
@@ -293,16 +299,24 @@ def write_output(result: CourseExtraction, out_dir: Path) -> Path:
 
 
 @flow(name="course_analyzer_poc")
-def course_analyzer(syllabus_path: str) -> CourseExtraction:
+def course_analyzer(
+    syllabus_path: str, ai_config: AIConfig | None = None
+) -> CourseExtraction:
     """
     Run the full extraction pipeline against a single syllabus file.
 
     Args:
         syllabus_path: Path to a plain-text syllabus file.
+        ai_config: Backend + model selection. Defaults to env-driven config
+            (AI_BACKEND, AGAI_*) so the CLI keeps working without arguments.
 
     Returns:
         CourseExtraction with modules, items, and any unassigned items.
     """
+    from flows.ai_client import default_config
+
+    cfg = ai_config or default_config()
+
     logger = _logger()
     path = Path(syllabus_path)
     if not path.exists():
@@ -310,15 +324,19 @@ def course_analyzer(syllabus_path: str) -> CourseExtraction:
 
     syllabus_text = path.read_text()
     logger.info(
-        "Starting analysis: file=%s (%d chars)", path.name, len(syllabus_text)
+        "Starting analysis: file=%s (%d chars), backend=%s, model_override=%s",
+        path.name,
+        len(syllabus_text),
+        cfg.backend,
+        cfg.model_override or "(prompt default)",
     )
 
     with emit_on_failure("course_info"):
-        course_info = extract_course_info(syllabus_text)
+        course_info = extract_course_info(syllabus_text, cfg)
     with emit_on_failure("modules"):
-        modules = extract_modules(syllabus_text)
+        modules = extract_modules(syllabus_text, cfg)
     with emit_on_failure("items"):
-        items = extract_items(syllabus_text, modules)
+        items = extract_items(syllabus_text, modules, cfg)
     with emit_on_failure("assemble"):
         result = assemble(path.name, course_info, modules, items)
 

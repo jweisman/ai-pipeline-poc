@@ -28,11 +28,15 @@ from typing import Any, Optional
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+import os  # noqa: E402
+
+import httpx  # noqa: E402
 from fastapi import FastAPI, HTTPException, Request  # noqa: E402
 from fastapi.responses import StreamingResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from fastapi.templating import Jinja2Templates  # noqa: E402
 
+from flows.ai_client import AIConfig  # noqa: E402
 from flows.course_analyzer import course_analyzer  # noqa: E402
 from flows.stage_events import stage_sink  # noqa: E402
 
@@ -40,7 +44,7 @@ from flows.stage_events import stage_sink  # noqa: E402
 SYLLABI_DIR = ROOT / "syllabi"
 WEB_DIR = Path(__file__).resolve().parent
 
-app = FastAPI(title="onCourse — Course Analyzer")
+app = FastAPI(title="AI Pipeline POC")
 app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=WEB_DIR / "templates")
 
@@ -70,6 +74,8 @@ STAGES = [
 class RunState:
     run_id: str
     syllabus: str
+    backend: str = "anthropic"
+    model: Optional[str] = None
     status: str = "pending"  # pending | running | done | error
     events: queue.Queue = field(default_factory=queue.Queue)
     result: Optional[dict[str, Any]] = None
@@ -126,8 +132,12 @@ def _run_flow(state: RunState, syllabus_path: Path) -> None:
         state.status = "running"
         state.events.put({"type": "status", "status": "running"})
 
+        ai_config = AIConfig(
+            backend=state.backend,  # type: ignore[arg-type]
+            model_override=state.model,
+        )
         with stage_sink(stage_callback):
-            result = course_analyzer(str(syllabus_path))
+            result = course_analyzer(str(syllabus_path), ai_config=ai_config)
         state.result = json.loads(result.model_dump_json())
         state.status = "done"
         # Send status before result. The frontend closes the SSE stream as
@@ -177,8 +187,39 @@ async def index(request: Request):
         {
             "syllabi": _list_syllabi(),
             "stages": STAGES,
+            "default_backend": os.environ.get("AI_BACKEND", "anthropic").lower(),
+            "agai_default_model": os.environ.get("AGAI_DEFAULT_MODEL", "gpt_4o"),
         },
     )
+
+
+@app.get("/agai/models")
+async def list_agai_models():
+    """Proxy AGAI's model list so the browser doesn't need direct access to
+    the AGAI host. Returns a list of {id, display}."""
+    base = os.environ.get("AGAI_BASE_URL")
+    token = os.environ.get("AGAI_AUTH_TOKEN")
+    if not base or not token:
+        raise HTTPException(
+            503, "AGAI_BASE_URL / AGAI_AUTH_TOKEN not configured on the server"
+        )
+    url = base.rstrip("/") + "/large-language-models/"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url, headers={"x-auth-token": token})
+        resp.raise_for_status()
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"AGAI request failed: {e}") from e
+
+    data = resp.json()
+    # AGAI returns { "title": ..., "resources": [{"href": "/.../gpt_4o/", "display": "..."}] }
+    models = []
+    for r in data.get("resources", []):
+        href = (r.get("href") or "").strip().rstrip("/")
+        model_id = href.rsplit("/", 1)[-1].strip()
+        if model_id:
+            models.append({"id": model_id, "display": r.get("display", model_id)})
+    return {"models": models}
 
 
 @app.post("/runs")
@@ -190,17 +231,28 @@ async def start_run(payload: dict):
     if not syllabus_path.is_file() or syllabus_path.parent != SYLLABI_DIR:
         raise HTTPException(404, f"Unknown syllabus: {syllabus}")
 
+    backend = (payload.get("backend") or os.environ.get("AI_BACKEND", "anthropic")).lower()
+    if backend not in ("anthropic", "agai"):
+        raise HTTPException(400, f"Unknown backend: {backend!r}")
+    model = payload.get("model") or None
+    if backend == "agai" and not model:
+        # Fall back to env default; AIConfig.resolve_model handles the final
+        # default, but capturing it here keeps RunState honest for logs/debug.
+        model = os.environ.get("AGAI_DEFAULT_MODEL") or "gpt_4o"
+
     with _runs_lock:
         if any(r.status == "running" for r in _runs.values()):
             raise HTTPException(409, "Another run is already in progress")
         run_id = str(uuid.uuid4())
-        state = RunState(run_id=run_id, syllabus=syllabus)
+        state = RunState(
+            run_id=run_id, syllabus=syllabus, backend=backend, model=model
+        )
         _runs[run_id] = state
 
     threading.Thread(
         target=_run_flow, args=(state, syllabus_path), daemon=True
     ).start()
-    return {"run_id": run_id}
+    return {"run_id": run_id, "backend": backend, "model": model}
 
 
 @app.get("/runs/{run_id}/events")

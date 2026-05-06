@@ -1,4 +1,4 @@
-# onCourse — Course Analyzer POC (Prefect)
+# AI Pipeline POC (Prefect)
 
 A working Prefect pipeline that demonstrates an  encapsulated AI architecture: Prefect orchestrates a sequence of LLM calls, prompts live as
 versioned YAML files, data flows between tasks as typed Pydantic models,
@@ -7,14 +7,19 @@ and the result is a single structured JSON document.
 This pipeline takes a syllabus and returns course-level metadata plus the
 course's modules with their assignments and instructional materials, in order.
 
+The LLM backend is selectable per run: the public **Anthropic** API
+(default) or **Clarivate's AGAI Platform** via its OpenAI-compatible
+endpoint. The web UI exposes a backend toggle and, when AGAI is selected,
+a model dropdown populated live from AGAI's model listing.
+
 ## What's in here
 
 ```
-oncourse-poc/
+ai-pipeline-poc/
 ├── flows/
 │   ├── course_analyzer.py        # The Prefect flow itself (4 tasks)
 │   ├── prompts.py                # YAML loader + Jinja2 renderer
-│   ├── ai_client.py              # Thin wrapper around the LLM (swap for AGAI later)
+│   ├── ai_client.py              # Thin wrapper: dispatches to anthropic or AGAI backend
 │   └── stage_events.py           # Lightweight progress hook for the web UI
 ├── web/
 │   ├── app.py                    # FastAPI server: index, /runs, SSE event stream
@@ -74,12 +79,25 @@ retryable; data passes between them as validated Pydantic models.
 ## Setup
 
 ```bash
-cd oncourse-poc
+cd ai-pipeline-poc
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+```
 
+Pick a backend (or set both — the web UI lets you toggle per run):
+
+```bash
+# Anthropic (default)
 export ANTHROPIC_API_KEY=sk-ant-...
+
+# AGAI Platform
+export AGAI_BASE_URL=https://agai-platform-api.prod.int.proquest.com
+export AGAI_AUTH_TOKEN=...
+export AGAI_DEFAULT_MODEL=gpt_4o     # optional; default for AGAI runs
+
+# Optional: change the default backend for CLI runs (UI overrides per run)
+export AI_BACKEND=anthropic          # or: agai
 ```
 
 ## Run the demo
@@ -112,6 +130,10 @@ python -m web.app
 Then open http://127.0.0.1:8000.
 
 What you get:
+- Backend selector (Anthropic / AGAI). When AGAI is selected, a model
+  dropdown is populated live from `GET /agai/models` (which proxies
+  AGAI's `/large-language-models/`). Both the chosen backend and model
+  persist to `localStorage` between visits.
 - Live diagram of the 5-task pipeline, with the active stage highlighted.
 - Streaming logs (Server-Sent Events) as each task runs — same lines you'd
   see in the terminal.
@@ -126,7 +148,7 @@ the flow function wraps each task call in `emit_on_failure(...)` so a
 single `stage:error` event is emitted on terminal failure (after retries
 are exhausted). The web layer installs a sink that translates these into
 SSE messages, so the diagram is driven by the flow itself rather than by
-string-matching on log lines. Any other consumer (the real onCourse app,
+string-matching on log lines. Any other consumer (the real app,
 a CLI wrapper, a test harness) gets the same start/complete/error contract
 for free. Outside any sink (CLI runs, unit tests) the emits are no-ops.
 
@@ -187,9 +209,20 @@ and `max_tokens` are co-located with the prompt text. When we move to
 production we can either keep this in Git (current setup) or move it to a
 prompt registry (only `flows/prompts.py` changes).
 
-**Swap-in point for AGAI.** When the real AGAI client is available, only
-`flows/ai_client.py` changes. The flow code, prompts, and schemas all
-stay put.
+**Backends are pluggable.** `flows/ai_client.py` dispatches on an
+`AIConfig.backend` value (`anthropic` or `agai`) that the flow threads
+through every task. Adding a new backend means adding a branch in
+`run_prompt(...)` and an env-var-fed client constructor — flow code,
+prompts, and schemas don't move.
+
+**AGAI uses the OpenAI-compatible endpoint, not the Anthropic-compatible
+one.** AGAI ships only OpenAI/Llama models — its Anthropic-compatible
+path errors with "Model X is not an Anthropic model" for any of them.
+The OpenAI-compatible endpoint is the actually-usable shape; model IDs
+(`gpt_4o`, `gpt_41`, `o3`, …) match `GET /large-language-models/`
+exactly. When AGAI is selected, the prompt YAML's `model:` field is
+ignored and the runtime model comes from the UI selector or
+`AGAI_DEFAULT_MODEL`.
 
 ## Known limitations of the POC
 
