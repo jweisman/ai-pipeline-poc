@@ -37,6 +37,7 @@ import json
 import logging
 import os
 import re
+import shlex
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -217,20 +218,55 @@ def _run_openai(
     return choice.message.content or ""
 
 
+def _log_agai_failure(
+    http: httpx.Client,
+    path: str,
+    payload: dict[str, Any],
+    response: httpx.Response,
+) -> None:
+    """Dump enough request/response detail for an AGAI support ticket — including
+    a copy-pasteable curl command — when AGAI returns a non-2xx status. The
+    auth token is replaced with a `$AGAI_AUTH_TOKEN` placeholder so the dump
+    is safe to share."""
+    full_url = str(http.base_url).rstrip("/") + path
+    body_json = json.dumps(payload)
+    curl = (
+        f"curl -X POST {shlex.quote(full_url)} \\\n"
+        f"  -H 'x-auth-token: $AGAI_AUTH_TOKEN' \\\n"
+        f"  -H 'Content-Type: application/json' \\\n"
+        f"  --data-raw {shlex.quote(body_json)}"
+    )
+    response_body = response.text[:4000]
+    logger.error(
+        "AGAI request failed: status=%d url=%s\n"
+        "Request body: %s\n"
+        "Response headers: %s\n"
+        "Response body (first 4000 chars): %s\n"
+        "Reproduce with curl (token redacted):\n%s",
+        response.status_code,
+        full_url,
+        body_json,
+        dict(response.headers),
+        response_body,
+        curl,
+    )
+
+
 def _run_agai(
     *, prompt: str, model: str, temperature: float, max_tokens: int
 ) -> str:
     """Hit AGAI's native completion endpoint. Accepts every model AGAI lists,
     including Llama — unlike the OpenAI-compatible facade which is gpt_*-only."""
     http = _get_agai_http()
-    response = http.post(
-        f"/large-language-models/{model}/",
-        json={
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-        },
-    )
+    path = f"/large-language-models/{model}/"
+    payload = {
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    response = http.post(path, json=payload)
+    if not response.is_success:
+        _log_agai_failure(http, path, payload, response)
     response.raise_for_status()
     data = response.json()
     results = data.get("results") or []
