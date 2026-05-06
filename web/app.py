@@ -188,9 +188,78 @@ async def index(request: Request):
             "syllabi": _list_syllabi(),
             "stages": STAGES,
             "default_backend": os.environ.get("AI_BACKEND", "anthropic").lower(),
+            "anthropic_default_model": os.environ.get(
+                "ANTHROPIC_DEFAULT_MODEL", "claude-sonnet-4-20250514"
+            ),
+            "openai_default_model": os.environ.get(
+                "OPENAI_DEFAULT_MODEL", "gpt-4o-mini"
+            ),
             "agai_default_model": os.environ.get("AGAI_DEFAULT_MODEL", "gpt_4o"),
         },
     )
+
+
+@app.get("/anthropic/models")
+async def list_anthropic_models():
+    """List available Claude models from Anthropic's `/v1/models` endpoint.
+    Requires ANTHROPIC_API_KEY on the server."""
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured on the server")
+
+    import anthropic
+
+    try:
+        client = anthropic.Anthropic()
+        listing = await asyncio.to_thread(client.models.list)
+    except Exception as e:
+        raise HTTPException(502, f"Anthropic request failed: {e}") from e
+
+    out = []
+    for m in listing.data:
+        out.append({
+            "id": m.id,
+            "display": getattr(m, "display_name", None) or m.id,
+        })
+    # Newest first — Anthropic IDs are dated, so reverse-lex sorts well enough.
+    out.sort(key=lambda x: x["id"], reverse=True)
+    return {"models": out}
+
+
+# Substrings that exclude a model from the chat-completions dropdown even if
+# its prefix matches. OpenAI lists hundreds of model IDs — most aren't chat.
+_OPENAI_EXCLUDE = (
+    "audio", "tts", "whisper", "embed", "realtime",
+    "image", "dall-e", "moderation", "transcribe",
+)
+_OPENAI_INCLUDE_PREFIXES = ("gpt-", "o1", "o3", "o4", "o5", "chatgpt-")
+
+
+@app.get("/openai/models")
+async def list_openai_models():
+    """List chat-capable models from OpenAI's `/models` endpoint, filtered to
+    keep the dropdown useful. Requires OPENAI_API_KEY on the server."""
+    if not os.environ.get("OPENAI_API_KEY"):
+        raise HTTPException(503, "OPENAI_API_KEY not configured on the server")
+
+    from openai import OpenAI
+
+    try:
+        client = OpenAI()
+        listing = await asyncio.to_thread(client.models.list)
+    except Exception as e:
+        raise HTTPException(502, f"OpenAI request failed: {e}") from e
+
+    out = []
+    for m in listing.data:
+        mid = m.id
+        low = mid.lower()
+        if not any(low.startswith(p) for p in _OPENAI_INCLUDE_PREFIXES):
+            continue
+        if any(x in low for x in _OPENAI_EXCLUDE):
+            continue
+        out.append({"id": mid, "display": mid})
+    out.sort(key=lambda x: x["id"])
+    return {"models": out}
 
 
 @app.get("/agai/models")
@@ -232,12 +301,19 @@ async def start_run(payload: dict):
         raise HTTPException(404, f"Unknown syllabus: {syllabus}")
 
     backend = (payload.get("backend") or os.environ.get("AI_BACKEND", "anthropic")).lower()
-    if backend not in ("anthropic", "agai"):
+    if backend not in ("anthropic", "openai", "agai"):
         raise HTTPException(400, f"Unknown backend: {backend!r}")
     model = payload.get("model") or None
-    if backend == "agai" and not model:
-        # Fall back to env default; AIConfig.resolve_model handles the final
-        # default, but capturing it here keeps RunState honest for logs/debug.
+    # Capture an effective model name for logs/debug. AIConfig.resolve_model
+    # handles the ultimate fallback if we leave model=None.
+    if backend == "anthropic" and not model:
+        # Stay None here so resolve_model() falls through to the YAML default,
+        # which keeps per-prompt Claude model differences usable for CLI runs.
+        # The web UI always sends a non-empty model for anthropic.
+        pass
+    elif backend == "openai" and not model:
+        model = os.environ.get("OPENAI_DEFAULT_MODEL") or "gpt-4o-mini"
+    elif backend == "agai" and not model:
         model = os.environ.get("AGAI_DEFAULT_MODEL") or "gpt_4o"
 
     with _runs_lock:

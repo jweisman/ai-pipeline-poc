@@ -19,7 +19,7 @@ const els = {
   downloadJson: document.getElementById("download-json"),
   backendSection: document.getElementById("backend-section"),
   modelRow: document.getElementById("model-row"),
-  modelSelect: document.getElementById("agai-model"),
+  modelSelect: document.getElementById("model-select"),
   modelHint: document.getElementById("model-hint"),
 };
 
@@ -30,14 +30,36 @@ let activeSource = null;
 // ---------------------------------------------------------------------------
 
 const BACKEND_KEY = "ai-pipeline-poc.backend";
-const MODEL_KEY = "ai-pipeline-poc.agai_model";
+const modelKey = (backend) => `ai-pipeline-poc.model.${backend}`;
+
+// All three backends now use a per-run model selector. UI selection wins
+// over each backend's *_DEFAULT_MODEL env var and (for anthropic) the YAML.
+const MODEL_BACKENDS = new Set(["anthropic", "openai", "agai"]);
+
+const MODEL_ENDPOINT = {
+  anthropic: "/anthropic/models",
+  openai: "/openai/models",
+  agai: "/agai/models",
+};
+
+const DEFAULT_MODEL_ATTR = {
+  anthropic: "anthropicDefaultModel",
+  openai: "openaiDefaultModel",
+  agai: "agaiDefaultModel",
+};
 
 const backendState = {
   backend: localStorage.getItem(BACKEND_KEY)
     || els.backendSection.dataset.defaultBackend
     || "anthropic",
-  agaiModel: localStorage.getItem(MODEL_KEY) || "",
-  modelsLoaded: false,
+  // Per-backend cache of which model the user picked, plus whether we've
+  // already fetched the model list this session.
+  selectedModel: {
+    anthropic: localStorage.getItem(modelKey("anthropic")) || "",
+    openai: localStorage.getItem(modelKey("openai")) || "",
+    agai: localStorage.getItem(modelKey("agai")) || "",
+  },
+  modelsLoaded: { anthropic: false, openai: false, agai: false },
 };
 
 function setBackend(backend, { persist = true } = {}) {
@@ -49,36 +71,58 @@ function setBackend(backend, { persist = true } = {}) {
     btn.classList.toggle("active", active);
     btn.setAttribute("aria-checked", active ? "true" : "false");
   }
-  els.modelRow.classList.toggle("hidden", backend !== "agai");
 
-  if (backend === "agai" && !backendState.modelsLoaded) {
-    loadAgaiModels();
+  const usesSelector = MODEL_BACKENDS.has(backend);
+  els.modelRow.classList.toggle("hidden", !usesSelector);
+  if (usesSelector) {
+    if (!backendState.modelsLoaded[backend]) {
+      loadModels(backend);
+    } else {
+      // Re-render so the dropdown reflects the per-backend selection.
+      // (No-op if already rendered for this backend; cheap enough to redo.)
+      renderCurrentBackendModels();
+    }
   }
 }
 
-async function loadAgaiModels() {
+let lastRendered = { backend: null, models: null };
+
+async function loadModels(backend) {
   els.modelHint.textContent = "";
+  els.modelSelect.innerHTML = "";
+  const loading = document.createElement("option");
+  loading.value = "";
+  loading.textContent = "Loading models…";
+  els.modelSelect.appendChild(loading);
+
   try {
-    const res = await fetch("/agai/models");
+    const res = await fetch(MODEL_ENDPOINT[backend]);
     if (!res.ok) {
       const txt = await res.text();
       throw new Error(`${res.status}: ${txt}`);
     }
     const data = await res.json();
     const models = data.models || [];
-    backendState.modelsLoaded = true;
-    populateModelSelect(models);
+    backendState.modelsLoaded[backend] = true;
+    lastRendered = { backend, models };
+    populateModelSelect(backend, models);
   } catch (e) {
     els.modelSelect.innerHTML = "";
     const opt = document.createElement("option");
     opt.value = "";
-    opt.textContent = "(failed to load AGAI models)";
+    opt.textContent = `(failed to load ${backend} models)`;
     els.modelSelect.appendChild(opt);
     els.modelHint.textContent = String(e.message || e);
   }
 }
 
-function populateModelSelect(models) {
+function renderCurrentBackendModels() {
+  if (lastRendered.backend === backendState.backend && lastRendered.models) {
+    populateModelSelect(lastRendered.backend, lastRendered.models);
+  }
+}
+
+function populateModelSelect(backend, models) {
   els.modelSelect.innerHTML = "";
   if (!models.length) {
     const opt = document.createElement("option");
@@ -88,25 +132,29 @@ function populateModelSelect(models) {
     return;
   }
 
-  const fallback = els.backendSection.dataset.agaiDefaultModel || models[0].id;
-  const desired = backendState.agaiModel || fallback;
+  const fallback =
+    els.backendSection.dataset[DEFAULT_MODEL_ATTR[backend]] || models[0].id;
+  const desired = backendState.selectedModel[backend] || fallback;
 
   for (const m of models) {
     const opt = document.createElement("option");
     opt.value = m.id;
-    opt.textContent = m.display ? `${m.display} (${m.id})` : m.id;
+    opt.textContent =
+      m.display && m.display !== m.id ? `${m.display} (${m.id})` : m.id;
     if (m.id === desired) opt.selected = true;
     els.modelSelect.appendChild(opt);
   }
-  // If `desired` wasn't in the list, browser auto-selects index 0; sync state
-  // back so the persisted value reflects what's actually shown.
-  backendState.agaiModel = els.modelSelect.value;
-  localStorage.setItem(MODEL_KEY, backendState.agaiModel);
+  // If `desired` wasn't in the list, the browser auto-selects index 0; sync
+  // state back so the persisted value reflects what's actually shown.
+  backendState.selectedModel[backend] = els.modelSelect.value;
+  localStorage.setItem(modelKey(backend), els.modelSelect.value);
 }
 
 els.modelSelect.addEventListener("change", () => {
-  backendState.agaiModel = els.modelSelect.value;
-  localStorage.setItem(MODEL_KEY, backendState.agaiModel);
+  const b = backendState.backend;
+  if (!MODEL_BACKENDS.has(b)) return;
+  backendState.selectedModel[b] = els.modelSelect.value;
+  localStorage.setItem(modelKey(b), els.modelSelect.value);
 });
 
 for (const btn of document.querySelectorAll(".seg-btn")) {
@@ -200,8 +248,9 @@ async function startRun(syllabusName) {
   let runId;
   try {
     const body = { syllabus: syllabusName, backend: backendState.backend };
-    if (backendState.backend === "agai" && backendState.agaiModel) {
-      body.model = backendState.agaiModel;
+    if (MODEL_BACKENDS.has(backendState.backend)) {
+      const m = backendState.selectedModel[backendState.backend];
+      if (m) body.model = m;
     }
     const res = await fetch("/runs", {
       method: "POST",

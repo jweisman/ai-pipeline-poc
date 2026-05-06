@@ -29,6 +29,8 @@
 
     <section class="backend-section" id="backend-section"
              data-default-backend="{{ default_backend }}"
+             data-anthropic-default-model="{{ anthropic_default_model }}"
+             data-openai-default-model="{{ openai_default_model }}"
              data-agai-default-model="{{ agai_default_model }}">
       <h2>Backend</h2>
       <div class="backend-card">
@@ -36,12 +38,13 @@
           <label class="backend-label">Provider</label>
           <div class="segmented" role="radiogroup" aria-label="Backend">
             <button type="button" class="seg-btn" data-backend="anthropic" role="radio">Anthropic (Claude)</button>
+            <button type="button" class="seg-btn" data-backend="openai" role="radio">OpenAI</button>
             <button type="button" class="seg-btn" data-backend="agai" role="radio">AGAI Platform</button>
           </div>
         </div>
         <div class="backend-row hidden" id="model-row">
-          <label class="backend-label" for="agai-model">Model</label>
-          <select id="agai-model" class="model-select">
+          <label class="backend-label" for="model-select">Model</label>
+          <select id="model-select" class="model-select">
             <option value="">Loading models…</option>
           </select>
           <span class="backend-hint" id="model-hint"></span>

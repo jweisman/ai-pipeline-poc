@@ -7,10 +7,18 @@ and the result is a single structured JSON document.
 This pipeline takes a syllabus and returns course-level metadata plus the
 course's modules with their assignments and instructional materials, in order.
 
-The LLM backend is selectable per run: the public **Anthropic** API
-(default) or **Clarivate's AGAI Platform** via its OpenAI-compatible
-endpoint. The web UI exposes a backend toggle and, when AGAI is selected,
-a model dropdown populated live from AGAI's model listing.
+The LLM backend is selectable per run. Three options, all with a live
+model dropdown sourced from each provider's API:
+
+- **Anthropic** (default) — public Anthropic API. Models listed live via
+  `client.models.list()`. UI selection overrides the prompt YAML's
+  `model:` for the run.
+- **OpenAI** — public OpenAI API. Chat-capable models listed live via
+  `client.models.list()`, filtered server-side.
+- **AGAI Platform** — Clarivate's internal LLM gateway, hit via its
+  **native** `/large-language-models/{model}/` endpoint (not the
+  OpenAI-compatible facade — that one rejects Llama and other non-GPT
+  models). Models listed live from AGAI.
 
 ## What's in here
 
@@ -19,7 +27,7 @@ ai-pipeline-poc/
 ├── flows/
 │   ├── course_analyzer.py        # The Prefect flow itself (4 tasks)
 │   ├── prompts.py                # YAML loader + Jinja2 renderer
-│   ├── ai_client.py              # Thin wrapper: dispatches to anthropic or AGAI backend
+│   ├── ai_client.py              # Thin wrapper: dispatches to anthropic / openai / AGAI backend
 │   └── stage_events.py           # Lightweight progress hook for the web UI
 ├── web/
 │   ├── app.py                    # FastAPI server: index, /runs, SSE event stream
@@ -85,19 +93,25 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Pick a backend (or set both — the web UI lets you toggle per run):
+Pick one or more backends (the web UI lets you toggle per run; only
+unused backends can be left unset):
 
 ```bash
 # Anthropic (default)
 export ANTHROPIC_API_KEY=sk-ant-...
+export ANTHROPIC_DEFAULT_MODEL=claude-sonnet-4-20250514   # optional; default for Anthropic runs
+
+# OpenAI
+export OPENAI_API_KEY=sk-...
+export OPENAI_DEFAULT_MODEL=gpt-4o-mini   # optional; default for OpenAI runs
 
 # AGAI Platform
 export AGAI_BASE_URL=https://agai-platform-api.prod.int.proquest.com
 export AGAI_AUTH_TOKEN=...
-export AGAI_DEFAULT_MODEL=gpt_4o     # optional; default for AGAI runs
+export AGAI_DEFAULT_MODEL=gpt_4o          # optional; default for AGAI runs
 
 # Optional: change the default backend for CLI runs (UI overrides per run)
-export AI_BACKEND=anthropic          # or: agai
+export AI_BACKEND=anthropic               # or: openai | agai
 ```
 
 ## Run the demo
@@ -130,9 +144,10 @@ python -m web.app
 Then open http://127.0.0.1:8000.
 
 What you get:
-- Backend selector (Anthropic / AGAI). When AGAI is selected, a model
-  dropdown is populated live from `GET /agai/models` (which proxies
-  AGAI's `/large-language-models/`). Both the chosen backend and model
+- Backend selector (Anthropic / OpenAI / AGAI). When OpenAI or AGAI is
+  selected, a model dropdown is populated live from `GET /openai/models`
+  or `GET /agai/models` respectively (server-side proxies of the
+  upstream listings). The chosen backend and per-backend model selection
   persist to `localStorage` between visits.
 - Live diagram of the 5-task pipeline, with the active stage highlighted.
 - Streaming logs (Server-Sent Events) as each task runs — same lines you'd
@@ -210,19 +225,21 @@ production we can either keep this in Git (current setup) or move it to a
 prompt registry (only `flows/prompts.py` changes).
 
 **Backends are pluggable.** `flows/ai_client.py` dispatches on an
-`AIConfig.backend` value (`anthropic` or `agai`) that the flow threads
-through every task. Adding a new backend means adding a branch in
-`run_prompt(...)` and an env-var-fed client constructor — flow code,
+`AIConfig.backend` value (`anthropic` | `openai` | `agai`) that the flow
+threads through every task. Adding a new backend means adding a branch
+in `run_prompt(...)` and an env-var-fed client constructor — flow code,
 prompts, and schemas don't move.
 
-**AGAI uses the OpenAI-compatible endpoint, not the Anthropic-compatible
-one.** AGAI ships only OpenAI/Llama models — its Anthropic-compatible
-path errors with "Model X is not an Anthropic model" for any of them.
-The OpenAI-compatible endpoint is the actually-usable shape; model IDs
-(`gpt_4o`, `gpt_41`, `o3`, …) match `GET /large-language-models/`
-exactly. When AGAI is selected, the prompt YAML's `model:` field is
-ignored and the runtime model comes from the UI selector or
-`AGAI_DEFAULT_MODEL`.
+**AGAI uses its native endpoint, not either compatibility facade.** AGAI
+exposes Anthropic-compatible and OpenAI-compatible facades on top of its
+real `/large-language-models/{model}/` endpoint. Both facades are
+family-restricted: the Anthropic-compatible one rejects every model AGAI
+actually has ("Model X is not an Anthropic model"), and the
+OpenAI-compatible one 500s for `llama_32_instruct_90b` and other
+non-OpenAI models. The native endpoint accepts every model the listing
+returns, so we use that. When OpenAI or AGAI is selected, prompt YAML's
+`model:` is ignored and the runtime model comes from the UI selector
+(falling back to the relevant `*_DEFAULT_MODEL` env var).
 
 ## Known limitations of the POC
 
