@@ -165,6 +165,19 @@ What you get:
 - Result page rendering: course-info card (title, code, level, instructors,
   term, description, course objectives), then each module with its items
   in a clean table, then unassigned items if any.
+- **QC panel under the result.** A "Run QC" button launches the QC flow
+  on the just-extracted JSON, with its own 4-stage diagram (load,
+  checks, judge, write), live log feed, and a structured report card
+  (overall status badge, per-check rows, judge rationale + score,
+  flagged fields, downloads). A "Use LLM judge" toggle lets you skip
+  the LLM call. If a QC report already exists on disk for the syllabus,
+  the panel surfaces a one-line summary on page load before any new
+  run. The QC panel has its **own backend / model selector for the
+  judge**, independent of the inference selector — best-practice
+  LLM-as-judge runs on a different model family than the inference
+  model to mitigate self-preference bias. On first load the judge
+  defaults to a different family from the inference selection
+  (`anthropic` ↔ `openai`); after that, your judge choice persists.
 
 How progress works: each task emits explicit `stage:start` / `stage:complete`
 events through `flows/stage_events.py` (a `ContextVar`-scoped sink), and
@@ -233,7 +246,8 @@ output/foo.extracted.json
 └────────────────────────────┘                      qc_output/foo.review.json (if review needed)
 ```
 
-Run it:
+Run it from the web UI (under any extracted course's result page) or
+from the CLI:
 
 ```bash
 # QC every output/*.extracted.json
@@ -249,6 +263,23 @@ python -m qc.qc_flow --no-judge
 The QC flow uses the same `AI_BACKEND` / `*_DEFAULT_MODEL` env vars as
 the main pipeline. To add a new deterministic check, write a
 `_check_*` function in `qc/checks.py` and append it to `ALL_CHECKS`.
+
+Web routes for the QC pipeline:
+
+- `POST /qc` — start a QC run on the latest extraction for a syllabus
+  (body: `{syllabus, use_judge, backend, model, judge_backend,
+  judge_model}`). The `judge_*` fields control the LLM-as-judge backend
+  independently from the inference backend; both fall back to the
+  inference values if omitted. Returns `{qc_id}`.
+- `GET /qc/{qc_id}/events` — Server-Sent Events stream (same envelope
+  as `/runs/{run_id}/events`: `log`, `stage`, `status`, `result`,
+  `error`).
+- `GET /qc/{qc_id}/result` — final `QCReport` once the run is done.
+- `GET /qc-report/{stem}` — most-recent QC report on disk for a
+  syllabus stem (`bellevue_engl101`, etc.) or 404 if none exists.
+
+Concurrency: at most one extraction run and one QC run at a time
+(separate locks). Single-user POC.
 
 ## Run the tests (no API key required)
 
@@ -337,5 +368,6 @@ hardcoded default in `flows/ai_client.py`.
   generic fidelity pass (no rubric ensembles, no calibration). No golden
   datasets / partial-expected comparison yet — that lands once we have
   enough hand-curated extractions for "golden" to be meaningful. The
-  HITL review-task writer produces the record but no queue / UI consumes
-  it yet. The web UI does not yet expose a "Run QC" action.
+  HITL review-task writer produces a `qc_output/<stem>.review.json`
+  record on every needs-review run, but no queue / reviewer UI consumes
+  it yet — the file shape is the future contract.

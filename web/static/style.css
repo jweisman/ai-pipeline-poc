@@ -140,30 +140,29 @@ section h2 {
   flex: 0 0 auto;
 }
 
-/* ------------------ Backend selector ------------------ */
+/* ------------------ Selector row (backend + judge) ------------------ */
 
-.backend-card {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 14px 16px;
-  box-shadow: var(--shadow);
-  display: grid;
-  gap: 10px;
-}
-.backend-row {
+.selector-row {
   display: flex;
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  font-size: 13px;
 }
-.backend-label {
-  font-size: 12px;
+.selector-row-label {
+  font-weight: 600;
+  color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--muted);
-  font-weight: 600;
-  min-width: 72px;
+  font-size: 11px;
+}
+.selector-row-hint {
+  color: var(--err);
+  font-size: 12px;
 }
 .segmented {
   display: inline-flex;
@@ -176,9 +175,9 @@ section h2 {
   appearance: none;
   background: transparent;
   border: none;
-  padding: 6px 12px;
+  padding: 4px 9px;
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
   cursor: pointer;
   color: var(--ink);
 }
@@ -196,11 +195,7 @@ section h2 {
   border: 1px solid var(--line);
   border-radius: 6px;
   background: white;
-  min-width: 280px;
-}
-.backend-hint {
-  color: var(--err);
-  font-size: 12px;
+  min-width: 220px;
 }
 
 /* ------------------ Syllabus picker ------------------ */
@@ -443,3 +438,196 @@ section h2 {
 .item-points { font-variant-numeric: tabular-nums; }
 
 .empty-row { color: var(--muted); font-style: italic; padding: 8px; }
+
+/* ------------------ QC section ------------------ */
+
+.qc-section {
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+.qc-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.qc-heading {
+  margin: 0;
+  font-size: 16px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  font-weight: 600;
+}
+.qc-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.qc-judge-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.qc-judge-row {
+  margin-bottom: 12px;
+}
+.qc-judge-row.disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.qc-existing {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+.qc-existing-label { color: var(--muted); font-weight: 600; }
+.qc-existing-meta { color: var(--muted); }
+
+.qc-running {
+  margin-bottom: 16px;
+}
+.qc-workflow { margin-bottom: 12px; }
+.qc-workflow .stage.skipped {
+  opacity: 0.45;
+  filter: grayscale(0.6);
+}
+.qc-log-feed { max-height: 220px; }
+
+.qc-status-badge {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.qc-status-badge.pass { background: #e3f3e3; color: var(--ok); }
+.qc-status-badge.warn { background: #fff3d4; color: #8a5b00; }
+.qc-status-badge.fail { background: #fde4e2; color: var(--err); }
+
+.qc-report {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  box-shadow: var(--shadow);
+}
+.qc-report-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.qc-report-summary { color: var(--muted); font-size: 13px; }
+
+.qc-subheading {
+  margin: 14px 0 8px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.qc-checks { margin-top: 4px; }
+.qc-check-row {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-bottom: 6px;
+  background: #fcfcfa;
+  font-size: 13px;
+}
+.qc-check-row.pass { background: #fcfcfa; }
+.qc-check-row.warn { background: #fffaee; border-color: #f3deb1; }
+.qc-check-row.fail { background: #fdf3f2; border-color: #f1cdc9; }
+.qc-check-name { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; color: var(--muted); }
+.qc-check-message { color: var(--ink); }
+.qc-check-fields {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+  padding-left: 8px;
+  border-left: 2px solid var(--line);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.qc-judge-block {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  background: #fcfcfa;
+}
+.qc-judge-block.warn { background: #fffaee; border-color: #f3deb1; }
+.qc-judge-block.fail { background: #fdf3f2; border-color: #f1cdc9; }
+.qc-judge-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.qc-judge-score { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.qc-judge-model {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  color: var(--muted);
+}
+.qc-judge-rationale { margin: 4px 0 0; font-size: 13px; }
+.qc-judge-fields {
+  margin-top: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.qc-flagged-list {
+  margin: 0;
+  padding-left: 18px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  color: var(--muted);
+}
+.qc-flagged-list li { word-break: break-all; }
+
+.qc-downloads {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+}
+.qc-review-note { font-size: 12px; color: var(--muted); }
+.qc-error {
+  color: var(--err);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+}

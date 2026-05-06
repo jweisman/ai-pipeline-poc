@@ -1,6 +1,7 @@
 "use strict";
 
 const STAGE_KEYS = ["course_info", "modules", "items", "assemble", "write"];
+const QC_STAGE_KEYS = ["qc_load", "qc_checks", "qc_judge", "qc_write"];
 
 const els = {
   workflow: document.getElementById("workflow"),
@@ -18,22 +19,41 @@ const els = {
   resultBack: document.getElementById("result-back"),
   downloadJson: document.getElementById("download-json"),
   backendSection: document.getElementById("backend-section"),
-  modelRow: document.getElementById("model-row"),
   modelSelect: document.getElementById("model-select"),
   modelHint: document.getElementById("model-hint"),
+  // QC
+  qcSection: document.getElementById("qc-section"),
+  qcWorkflow: document.getElementById("qc-workflow"),
+  qcRunning: document.getElementById("qc-running"),
+  qcProgressFill: document.getElementById("qc-progress-fill"),
+  qcProgressLabel: document.getElementById("qc-progress-label"),
+  qcLogFeed: document.getElementById("qc-log-feed"),
+  qcReport: document.getElementById("qc-report"),
+  qcExisting: document.getElementById("qc-existing"),
+  qcExistingStatus: document.getElementById("qc-existing-status"),
+  qcExistingMeta: document.getElementById("qc-existing-meta"),
+  qcShowExisting: document.getElementById("qc-show-existing"),
+  qcRunBtn: document.getElementById("run-qc-btn"),
+  qcUseJudge: document.getElementById("qc-use-judge"),
+  qcJudgeRow: document.getElementById("qc-judge-row"),
+  qcJudgeModel: document.getElementById("qc-judge-model"),
+  qcJudgeHint: document.getElementById("qc-judge-row-hint"),
 };
 
 let activeSource = null;
+let activeQcSource = null;
+let currentSyllabus = null;
 
 // ---------------------------------------------------------------------------
-// Backend selector
+// Backend selectors (inference + judge)
+//
+// We have two selectors on the page that do exactly the same thing — pick a
+// backend and a model — but are independent: the main one drives extraction,
+// the QC-panel one drives the LLM-as-judge call. They share a model-list
+// cache (a model list is a property of a backend, not of the selector) but
+// keep separate localStorage state so the user's two choices persist.
 // ---------------------------------------------------------------------------
 
-const BACKEND_KEY = "ai-pipeline-poc.backend";
-const modelKey = (backend) => `ai-pipeline-poc.model.${backend}`;
-
-// All three backends now use a per-run model selector. UI selection wins
-// over each backend's *_DEFAULT_MODEL env var and (for anthropic) the YAML.
 const MODEL_BACKENDS = new Set(["anthropic", "openai", "agai"]);
 
 const MODEL_ENDPOINT = {
@@ -42,120 +62,170 @@ const MODEL_ENDPOINT = {
   agai: "/agai/models",
 };
 
-const DEFAULT_MODEL_ATTR = {
-  anthropic: "anthropicDefaultModel",
-  openai: "openaiDefaultModel",
-  agai: "agaiDefaultModel",
+// Cache populated lazily from /<backend>/models. Shared across selectors.
+const SHARED_MODEL_CACHE = { anthropic: null, openai: null, agai: null };
+
+function complementaryBackend(backend) {
+  // First-load default for the judge — opposite of the inference family.
+  // AGAI is heavily OpenAI-flavored (gpt_*, llama_*); pair it with anthropic
+  // so the judge isn't from the same family by default.
+  if (backend === "anthropic") return "openai";
+  return "anthropic";
+}
+
+function createBackendSelector({
+  segBtns,
+  modelRow,           // optional element to hide/show — null means "always shown"
+  modelSelect,
+  modelHint,          // optional
+  storagePrefix,
+  defaultBackend,
+  defaultModelByBackend,
+}) {
+  const state = {
+    backend:
+      localStorage.getItem(`${storagePrefix}.backend`) || defaultBackend,
+    selectedModel: {
+      anthropic: localStorage.getItem(`${storagePrefix}.model.anthropic`) || "",
+      openai: localStorage.getItem(`${storagePrefix}.model.openai`) || "",
+      agai: localStorage.getItem(`${storagePrefix}.model.agai`) || "",
+    },
+  };
+
+  function setBackend(backend, { persist = true } = {}) {
+    state.backend = backend;
+    if (persist) localStorage.setItem(`${storagePrefix}.backend`, backend);
+
+    for (const btn of segBtns) {
+      const active = btn.dataset.backend === backend;
+      btn.classList.toggle("active", active);
+      btn.setAttribute("aria-checked", active ? "true" : "false");
+    }
+
+    if (modelRow) {
+      modelRow.classList.toggle("hidden", !MODEL_BACKENDS.has(backend));
+    }
+    if (MODEL_BACKENDS.has(backend)) {
+      if (SHARED_MODEL_CACHE[backend]) {
+        populateModelSelect(backend);
+      } else {
+        loadModels(backend);
+      }
+    }
+  }
+
+  async function loadModels(backend) {
+    if (modelHint) modelHint.textContent = "";
+    modelSelect.innerHTML = "";
+    const loading = document.createElement("option");
+    loading.value = "";
+    loading.textContent = "Loading models…";
+    modelSelect.appendChild(loading);
+
+    try {
+      const res = await fetch(MODEL_ENDPOINT[backend]);
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(`${res.status}: ${txt}`);
+      }
+      const data = await res.json();
+      SHARED_MODEL_CACHE[backend] = data.models || [];
+      if (state.backend === backend) populateModelSelect(backend);
+    } catch (e) {
+      modelSelect.innerHTML = "";
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = `(failed to load ${backend} models)`;
+      modelSelect.appendChild(opt);
+      if (modelHint) modelHint.textContent = String(e.message || e);
+    }
+  }
+
+  function populateModelSelect(backend) {
+    const models = SHARED_MODEL_CACHE[backend] || [];
+    modelSelect.innerHTML = "";
+    if (!models.length) {
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = "(no models returned)";
+      modelSelect.appendChild(opt);
+      return;
+    }
+
+    const fallback = defaultModelByBackend[backend] || models[0].id;
+    const desired = state.selectedModel[backend] || fallback;
+
+    for (const m of models) {
+      const opt = document.createElement("option");
+      opt.value = m.id;
+      opt.textContent =
+        m.display && m.display !== m.id ? `${m.display} (${m.id})` : m.id;
+      if (m.id === desired) opt.selected = true;
+      modelSelect.appendChild(opt);
+    }
+    state.selectedModel[backend] = modelSelect.value;
+    localStorage.setItem(`${storagePrefix}.model.${backend}`, modelSelect.value);
+  }
+
+  modelSelect.addEventListener("change", () => {
+    const b = state.backend;
+    if (!MODEL_BACKENDS.has(b)) return;
+    state.selectedModel[b] = modelSelect.value;
+    localStorage.setItem(`${storagePrefix}.model.${b}`, modelSelect.value);
+  });
+  for (const btn of segBtns) {
+    btn.addEventListener("click", () => setBackend(btn.dataset.backend));
+  }
+
+  setBackend(state.backend, { persist: false });
+
+  return {
+    getBackend: () => state.backend,
+    getModel: () => state.selectedModel[state.backend] || "",
+    setBackend,
+  };
+}
+
+const _backendDefaults = {
+  anthropic: els.backendSection.dataset.anthropicDefaultModel,
+  openai: els.backendSection.dataset.openaiDefaultModel,
+  agai: els.backendSection.dataset.agaiDefaultModel,
 };
 
-const backendState = {
-  backend: localStorage.getItem(BACKEND_KEY)
-    || els.backendSection.dataset.defaultBackend
-    || "anthropic",
-  // Per-backend cache of which model the user picked.
-  selectedModel: {
-    anthropic: localStorage.getItem(modelKey("anthropic")) || "",
-    openai: localStorage.getItem(modelKey("openai")) || "",
-    agai: localStorage.getItem(modelKey("agai")) || "",
-  },
-  // Per-backend cache of the model list fetched from the provider.
-  // null = not fetched yet for this backend.
-  cachedModels: { anthropic: null, openai: null, agai: null },
-};
-
-function setBackend(backend, { persist = true } = {}) {
-  backendState.backend = backend;
-  if (persist) localStorage.setItem(BACKEND_KEY, backend);
-
-  for (const btn of document.querySelectorAll(".seg-btn")) {
-    const active = btn.dataset.backend === backend;
-    btn.classList.toggle("active", active);
-    btn.setAttribute("aria-checked", active ? "true" : "false");
-  }
-
-  const usesSelector = MODEL_BACKENDS.has(backend);
-  els.modelRow.classList.toggle("hidden", !usesSelector);
-  if (usesSelector) {
-    const cached = backendState.cachedModels[backend];
-    if (cached) {
-      populateModelSelect(backend, cached);
-    } else {
-      loadModels(backend);
-    }
-  }
-}
-
-async function loadModels(backend) {
-  els.modelHint.textContent = "";
-  els.modelSelect.innerHTML = "";
-  const loading = document.createElement("option");
-  loading.value = "";
-  loading.textContent = "Loading models…";
-  els.modelSelect.appendChild(loading);
-
-  try {
-    const res = await fetch(MODEL_ENDPOINT[backend]);
-    if (!res.ok) {
-      const txt = await res.text();
-      throw new Error(`${res.status}: ${txt}`);
-    }
-    const data = await res.json();
-    const models = data.models || [];
-    backendState.cachedModels[backend] = models;
-    // Only render if the user hasn't switched away while we were fetching.
-    if (backendState.backend === backend) {
-      populateModelSelect(backend, models);
-    }
-  } catch (e) {
-    els.modelSelect.innerHTML = "";
-    const opt = document.createElement("option");
-    opt.value = "";
-    opt.textContent = `(failed to load ${backend} models)`;
-    els.modelSelect.appendChild(opt);
-    els.modelHint.textContent = String(e.message || e);
-  }
-}
-
-function populateModelSelect(backend, models) {
-  els.modelSelect.innerHTML = "";
-  if (!models.length) {
-    const opt = document.createElement("option");
-    opt.value = "";
-    opt.textContent = "(no models returned)";
-    els.modelSelect.appendChild(opt);
-    return;
-  }
-
-  const fallback =
-    els.backendSection.dataset[DEFAULT_MODEL_ATTR[backend]] || models[0].id;
-  const desired = backendState.selectedModel[backend] || fallback;
-
-  for (const m of models) {
-    const opt = document.createElement("option");
-    opt.value = m.id;
-    opt.textContent =
-      m.display && m.display !== m.id ? `${m.display} (${m.id})` : m.id;
-    if (m.id === desired) opt.selected = true;
-    els.modelSelect.appendChild(opt);
-  }
-  // If `desired` wasn't in the list, the browser auto-selects index 0; sync
-  // state back so the persisted value reflects what's actually shown.
-  backendState.selectedModel[backend] = els.modelSelect.value;
-  localStorage.setItem(modelKey(backend), els.modelSelect.value);
-}
-
-els.modelSelect.addEventListener("change", () => {
-  const b = backendState.backend;
-  if (!MODEL_BACKENDS.has(b)) return;
-  backendState.selectedModel[b] = els.modelSelect.value;
-  localStorage.setItem(modelKey(b), els.modelSelect.value);
+const inferenceSelector = createBackendSelector({
+  segBtns: els.backendSection.querySelectorAll(".seg-btn"),
+  modelRow: null, // single-row layout — model dropdown lives next to the segmented buttons
+  modelSelect: els.modelSelect,
+  modelHint: els.modelHint,
+  storagePrefix: "ai-pipeline-poc",
+  defaultBackend: els.backendSection.dataset.defaultBackend || "anthropic",
+  defaultModelByBackend: _backendDefaults,
 });
 
-for (const btn of document.querySelectorAll(".seg-btn")) {
-  btn.addEventListener("click", () => setBackend(btn.dataset.backend));
-}
+// Judge defaults to a different family from inference on first load — the
+// whole point of a separate judge model is to avoid self-preference bias.
+// Once the user picks one, we honor their choice and don't auto-sync.
+const _judgePersisted = localStorage.getItem("ai-pipeline-poc.judge.backend");
+const _judgeDefault =
+  _judgePersisted || complementaryBackend(inferenceSelector.getBackend());
 
-setBackend(backendState.backend, { persist: false });
+const judgeSelector = createBackendSelector({
+  segBtns: els.qcJudgeRow.querySelectorAll(".seg-btn"),
+  modelRow: null, // judge selector is always shown; "Use LLM judge" toggle controls it instead
+  modelSelect: els.qcJudgeModel,
+  modelHint: els.qcJudgeHint,
+  storagePrefix: "ai-pipeline-poc.judge",
+  defaultBackend: _judgeDefault,
+  defaultModelByBackend: _backendDefaults,
+});
+
+function refreshJudgeRowEnabled() {
+  // Visual cue when "Use LLM judge" is off — the row stays visible so the
+  // user can still see what would run, but it's dimmed and inert.
+  els.qcJudgeRow.classList.toggle("disabled", !els.qcUseJudge.checked);
+}
+els.qcUseJudge.addEventListener("change", refreshJudgeRowEnabled);
+refreshJudgeRowEnabled();
 
 // ---------------------------------------------------------------------------
 // View transitions
@@ -241,11 +311,12 @@ async function startRun(syllabusName) {
 
   let runId;
   try {
-    const body = { syllabus: syllabusName, backend: backendState.backend };
-    if (MODEL_BACKENDS.has(backendState.backend)) {
-      const m = backendState.selectedModel[backendState.backend];
-      if (m) body.model = m;
-    }
+    const body = {
+      syllabus: syllabusName,
+      backend: inferenceSelector.getBackend(),
+    };
+    const m = inferenceSelector.getModel();
+    if (m) body.model = m;
     const res = await fetch("/runs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -317,6 +388,8 @@ function renderResult(data, runId) {
   // sure the diagram reflects that, even if the final stage's "complete"
   // event was somehow missed.
   markAllDone();
+  resetQcSection();
+  currentSyllabus = data.source_filename || null;
   els.resultBody.innerHTML = "";
 
   els.resultBody.appendChild(renderCourseCard(data.course_info, data.source_filename));
@@ -347,6 +420,7 @@ function renderResult(data, runId) {
   els.downloadJson.download = `${stem}.extracted.json`;
 
   showOnly(els.resultSection);
+  loadExistingQcReport(stem).catch(() => {});
 }
 
 function renderCourseCard(info, sourceFilename) {
@@ -520,6 +594,346 @@ function renderItemsTable(items) {
 }
 
 // ---------------------------------------------------------------------------
+// QC lifecycle
+// ---------------------------------------------------------------------------
+
+function resetQcSection() {
+  if (activeQcSource) { activeQcSource.close(); activeQcSource = null; }
+  els.qcExisting.classList.add("hidden");
+  els.qcRunning.classList.add("hidden");
+  els.qcReport.classList.add("hidden");
+  els.qcReport.innerHTML = "";
+  els.qcLogFeed.innerHTML = "";
+  els.qcProgressFill.style.width = "0%";
+  els.qcProgressLabel.textContent = "Starting QC…";
+  for (const stage of els.qcWorkflow.querySelectorAll(".stage")) {
+    stage.classList.remove("active", "done", "failed", "skipped");
+  }
+}
+
+async function loadExistingQcReport(stem) {
+  try {
+    const res = await fetch(`/qc-report/${encodeURIComponent(stem)}`);
+    if (res.status === 404) return;
+    if (!res.ok) return;
+    const report = await res.json();
+    showExistingQcSummary(report);
+  } catch {
+    // Silent — absence of a prior report is the common case.
+  }
+}
+
+function showExistingQcSummary(report) {
+  els.qcExistingStatus.textContent = report.overall_status;
+  els.qcExistingStatus.className = `qc-status-badge ${report.overall_status}`;
+  const detCounts = countByStatus(report.deterministic);
+  const judgeStatuses = (report.judge || []).map((j) => j.status).join(", ") || "no judge";
+  els.qcExistingMeta.textContent =
+    `${detCounts.fail} fail · ${detCounts.warn} warn · ${detCounts.pass} pass · judge: ${judgeStatuses}`;
+  els.qcExisting.dataset.report = JSON.stringify(report);
+  els.qcExisting.classList.remove("hidden");
+}
+
+function countByStatus(checks) {
+  const out = { pass: 0, warn: 0, fail: 0 };
+  for (const c of checks || []) {
+    if (out[c.status] != null) out[c.status]++;
+  }
+  return out;
+}
+
+async function startQc() {
+  if (!currentSyllabus) return;
+  resetQcSection();
+  els.qcRunning.classList.remove("hidden");
+
+  const useJudge = els.qcUseJudge.checked;
+  // The judge stage is just dimmed if it'll be skipped — saves the user
+  // from wondering why "Judge" never lights up.
+  const judgeStageEl = els.qcWorkflow.querySelector('.stage[data-qc-stage="qc_judge"]');
+  if (judgeStageEl) judgeStageEl.classList.toggle("skipped", !useJudge);
+
+  let qcId;
+  try {
+    const body = {
+      syllabus: currentSyllabus,
+      use_judge: useJudge,
+      backend: inferenceSelector.getBackend(),
+      judge_backend: judgeSelector.getBackend(),
+    };
+    const m = inferenceSelector.getModel();
+    if (m) body.model = m;
+    const jm = judgeSelector.getModel();
+    if (jm) body.judge_model = jm;
+    const res = await fetch("/qc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Failed to start QC (${res.status}): ${text}`);
+    }
+    qcId = (await res.json()).qc_id;
+  } catch (e) {
+    els.qcProgressLabel.textContent = "Failed to start.";
+    els.qcReport.classList.remove("hidden");
+    els.qcReport.innerHTML = `<div class="qc-error">${escapeHtml(e.message || String(e))}</div>`;
+    return;
+  }
+
+  if (activeQcSource) activeQcSource.close();
+  activeQcSource = new EventSource(`/qc/${qcId}/events`);
+  activeQcSource.onmessage = (ev) => {
+    let data;
+    try { data = JSON.parse(ev.data); } catch { return; }
+    handleQcEvent(data, useJudge);
+  };
+  activeQcSource.onerror = () => {
+    if (activeQcSource && activeQcSource.readyState === EventSource.CLOSED) {
+      activeQcSource = null;
+    }
+  };
+}
+
+function handleQcEvent(event, useJudge) {
+  if (event.type === "log") {
+    appendQcLog(event.message, event.level);
+  } else if (event.type === "stage") {
+    applyQcStageEvent(event.stage, event.phase);
+  } else if (event.type === "status") {
+    if (event.status === "done") {
+      markAllQcDone(useJudge);
+      els.qcProgressLabel.textContent = "Done.";
+    } else if (event.status === "error") {
+      els.qcProgressLabel.textContent = "Failed.";
+    }
+  } else if (event.type === "result") {
+    renderQcReport(event.data);
+  } else if (event.type === "error") {
+    els.qcReport.classList.remove("hidden");
+    els.qcReport.innerHTML = `<div class="qc-error">${escapeHtml(event.message)}</div>`;
+  }
+}
+
+function applyQcStageEvent(stageKey, phase) {
+  if (!stageKey) return;
+  const idx = QC_STAGE_KEYS.indexOf(stageKey);
+  if (idx < 0) return;
+  const el = els.qcWorkflow.querySelector(`.stage[data-qc-stage="${stageKey}"]`);
+  if (!el) return;
+
+  if (phase === "start") {
+    for (let i = 0; i < idx; i++) {
+      const e = els.qcWorkflow.querySelector(`.stage[data-qc-stage="${QC_STAGE_KEYS[i]}"]`);
+      if (e && !e.classList.contains("skipped")) {
+        e.classList.remove("active");
+        e.classList.add("done");
+      }
+    }
+    el.classList.remove("done", "failed", "skipped");
+    el.classList.add("active");
+    els.qcProgressFill.style.width = `${(idx / QC_STAGE_KEYS.length) * 100}%`;
+    els.qcProgressLabel.textContent = qcStageLabel(stageKey);
+  } else if (phase === "complete") {
+    el.classList.remove("active");
+    el.classList.add("done");
+    els.qcProgressFill.style.width = `${((idx + 1) / QC_STAGE_KEYS.length) * 100}%`;
+  } else if (phase === "error") {
+    el.classList.remove("active", "done");
+    el.classList.add("failed");
+  }
+}
+
+function qcStageLabel(key) {
+  const el = els.qcWorkflow.querySelector(`.stage[data-qc-stage="${key}"] .stage-label`);
+  return el ? el.textContent : key;
+}
+
+function markAllQcDone(useJudge) {
+  for (const stage of els.qcWorkflow.querySelectorAll(".stage")) {
+    if (stage.classList.contains("skipped")) continue;
+    if (!useJudge && stage.dataset.qcStage === "qc_judge") continue;
+    stage.classList.remove("active");
+    stage.classList.add("done");
+  }
+  els.qcProgressFill.style.width = "100%";
+}
+
+function appendQcLog(msg, level) {
+  const line = document.createElement("span");
+  line.className = "log-line";
+  if (level === "WARNING") line.classList.add("warn");
+  if (level === "ERROR" || level === "CRITICAL") line.classList.add("err");
+  const lvl = document.createElement("span");
+  lvl.className = "lvl";
+  lvl.textContent = (level || "INFO").padEnd(5);
+  line.appendChild(lvl);
+  line.appendChild(document.createTextNode(msg));
+  els.qcLogFeed.appendChild(line);
+  els.qcLogFeed.scrollTop = els.qcLogFeed.scrollHeight;
+}
+
+function renderQcReport(report) {
+  if (activeQcSource) { activeQcSource.close(); activeQcSource = null; }
+  els.qcReport.innerHTML = "";
+  els.qcReport.classList.remove("hidden");
+
+  // Header: status badge + summary line
+  const header = document.createElement("div");
+  header.className = "qc-report-header";
+  const badge = document.createElement("span");
+  badge.className = `qc-status-badge ${report.overall_status}`;
+  badge.textContent = report.overall_status;
+  header.appendChild(badge);
+
+  const summary = document.createElement("span");
+  summary.className = "qc-report-summary";
+  const detCounts = countByStatus(report.deterministic);
+  const judgeBits = (report.judge || []).map((j) => `${j.status}${j.score != null ? ` (${j.score.toFixed(2)})` : ""}`);
+  summary.textContent =
+    `Deterministic: ${detCounts.pass} pass / ${detCounts.warn} warn / ${detCounts.fail} fail` +
+    (judgeBits.length ? ` · Judge: ${judgeBits.join(", ")}` : " · Judge: skipped") +
+    (report.needs_human_review ? " · needs human review" : "");
+  header.appendChild(summary);
+
+  els.qcReport.appendChild(header);
+
+  // Deterministic checks
+  const detSection = document.createElement("div");
+  detSection.className = "qc-checks";
+  const detHeader = document.createElement("h4");
+  detHeader.className = "qc-subheading";
+  detHeader.textContent = "Deterministic checks";
+  detSection.appendChild(detHeader);
+  for (const c of report.deterministic || []) {
+    detSection.appendChild(renderQcCheckRow(c));
+  }
+  els.qcReport.appendChild(detSection);
+
+  // Judge results
+  if (report.judge && report.judge.length) {
+    const jSection = document.createElement("div");
+    jSection.className = "qc-judge";
+    const jHeader = document.createElement("h4");
+    jHeader.className = "qc-subheading";
+    jHeader.textContent = "LLM judge";
+    jSection.appendChild(jHeader);
+    for (const j of report.judge) {
+      jSection.appendChild(renderQcJudgeBlock(j));
+    }
+    els.qcReport.appendChild(jSection);
+  }
+
+  // Flagged fields list (deduped union)
+  if (report.fields_flagged && report.fields_flagged.length) {
+    const ff = document.createElement("div");
+    ff.className = "qc-flagged";
+    const ffH = document.createElement("h4");
+    ffH.className = "qc-subheading";
+    ffH.textContent = `Flagged fields (${report.fields_flagged.length})`;
+    ff.appendChild(ffH);
+    const ul = document.createElement("ul");
+    ul.className = "qc-flagged-list";
+    for (const f of report.fields_flagged) {
+      const li = document.createElement("li");
+      li.textContent = f;
+      ul.appendChild(li);
+    }
+    ff.appendChild(ul);
+    els.qcReport.appendChild(ff);
+  }
+
+  // Downloads
+  const dl = document.createElement("div");
+  dl.className = "qc-downloads";
+  const reportBlob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
+  const reportLink = document.createElement("a");
+  reportLink.className = "btn ghost";
+  reportLink.href = URL.createObjectURL(reportBlob);
+  const stem = (report.source_filename || "result").replace(/\.[^.]+$/, "");
+  reportLink.download = `${stem}.qc.json`;
+  reportLink.textContent = "Download QC JSON";
+  dl.appendChild(reportLink);
+
+  if (report.needs_human_review) {
+    const note = document.createElement("span");
+    note.className = "qc-review-note";
+    note.textContent = `HITL review task written to qc_output/${stem}.review.json`;
+    dl.appendChild(note);
+  }
+  els.qcReport.appendChild(dl);
+}
+
+function renderQcCheckRow(check) {
+  const row = document.createElement("div");
+  row.className = `qc-check-row ${check.status}`;
+  const status = document.createElement("span");
+  status.className = `qc-status-badge ${check.status}`;
+  status.textContent = check.status;
+  const name = document.createElement("span");
+  name.className = "qc-check-name";
+  name.textContent = check.name;
+  const msg = document.createElement("span");
+  msg.className = "qc-check-message";
+  msg.textContent = check.message;
+  row.appendChild(status);
+  row.appendChild(name);
+  row.appendChild(msg);
+  if (check.flagged_fields && check.flagged_fields.length && check.status !== "pass") {
+    const fields = document.createElement("div");
+    fields.className = "qc-check-fields";
+    fields.textContent = check.flagged_fields.join(" · ");
+    row.appendChild(fields);
+  }
+  return row;
+}
+
+function renderQcJudgeBlock(judge) {
+  const block = document.createElement("div");
+  block.className = `qc-judge-block ${judge.status}`;
+  const head = document.createElement("div");
+  head.className = "qc-judge-head";
+  const status = document.createElement("span");
+  status.className = `qc-status-badge ${judge.status}`;
+  status.textContent = judge.status;
+  head.appendChild(status);
+  if (judge.score != null) {
+    const score = document.createElement("span");
+    score.className = "qc-judge-score";
+    score.textContent = `score: ${judge.score.toFixed(2)}`;
+    head.appendChild(score);
+  }
+  if (judge.model) {
+    const model = document.createElement("span");
+    model.className = "qc-judge-model";
+    model.textContent = judge.model;
+    head.appendChild(model);
+  }
+  block.appendChild(head);
+
+  const rationale = document.createElement("p");
+  rationale.className = "qc-judge-rationale";
+  rationale.textContent = judge.rationale || "(no rationale returned)";
+  block.appendChild(rationale);
+
+  if (judge.flagged_fields && judge.flagged_fields.length) {
+    const fields = document.createElement("div");
+    fields.className = "qc-judge-fields";
+    fields.textContent = "Flagged: " + judge.flagged_fields.join(" · ");
+    block.appendChild(fields);
+  }
+  return block;
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+// ---------------------------------------------------------------------------
 // Wire up
 // ---------------------------------------------------------------------------
 
@@ -533,5 +947,16 @@ els.errorBack.addEventListener("click", () => {
 });
 els.resultBack.addEventListener("click", () => {
   resetWorkflow();
+  resetQcSection();
+  currentSyllabus = null;
   showOnly(els.picker);
+});
+
+els.qcRunBtn.addEventListener("click", () => startQc());
+els.qcShowExisting.addEventListener("click", () => {
+  const raw = els.qcExisting.dataset.report;
+  if (!raw) return;
+  try {
+    renderQcReport(JSON.parse(raw));
+  } catch {}
 });

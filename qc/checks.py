@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from schemas.models import CourseExtraction, CourseItem, ModuleWithItems
+from schemas.models import CourseExtraction, CourseItem
 
 from qc.schemas import QCCheckResult
 

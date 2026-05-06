@@ -33,22 +33,17 @@
              data-openai-default-model="{{ openai_default_model }}"
              data-agai-default-model="{{ agai_default_model }}">
       <h2>Backend</h2>
-      <div class="backend-card">
-        <div class="backend-row">
-          <label class="backend-label">Provider</label>
-          <div class="segmented" role="radiogroup" aria-label="Backend">
-            <button type="button" class="seg-btn" data-backend="anthropic" role="radio">Anthropic (Claude)</button>
-            <button type="button" class="seg-btn" data-backend="openai" role="radio">OpenAI</button>
-            <button type="button" class="seg-btn" data-backend="agai" role="radio">AGAI Platform</button>
-          </div>
+      <div class="selector-row" id="backend-selector-row">
+        <span class="selector-row-label">Backend</span>
+        <div class="segmented" role="radiogroup" aria-label="Backend">
+          <button type="button" class="seg-btn" data-backend="anthropic" role="radio">Anthropic</button>
+          <button type="button" class="seg-btn" data-backend="openai" role="radio">OpenAI</button>
+          <button type="button" class="seg-btn" data-backend="agai" role="radio">AGAI</button>
         </div>
-        <div class="backend-row hidden" id="model-row">
-          <label class="backend-label" for="model-select">Model</label>
-          <select id="model-select" class="model-select">
-            <option value="">Loading models…</option>
-          </select>
-          <span class="backend-hint" id="model-hint"></span>
-        </div>
+        <select id="model-select" class="model-select">
+          <option value="">Loading models…</option>
+        </select>
+        <span class="selector-row-hint" id="model-hint"></span>
       </div>
     </section>
 
@@ -96,6 +91,57 @@
         </div>
       </div>
       <div id="result-body"></div>
+
+      <section class="qc-section" id="qc-section">
+        <div class="qc-toolbar">
+          <h3 class="qc-heading">QC</h3>
+          <div class="qc-controls">
+            <label class="qc-judge-toggle">
+              <input type="checkbox" id="qc-use-judge" checked />
+              <span>Use LLM judge</span>
+            </label>
+            <button class="btn" id="run-qc-btn">Run QC</button>
+          </div>
+        </div>
+
+        <div class="selector-row qc-judge-row" id="qc-judge-row">
+          <span class="selector-row-label">Judge model</span>
+          <div class="segmented" role="radiogroup" aria-label="Judge backend">
+            <button type="button" class="seg-btn" data-backend="anthropic" role="radio">Anthropic</button>
+            <button type="button" class="seg-btn" data-backend="openai" role="radio">OpenAI</button>
+            <button type="button" class="seg-btn" data-backend="agai" role="radio">AGAI</button>
+          </div>
+          <select id="qc-judge-model" class="model-select"></select>
+          <span class="selector-row-hint" id="qc-judge-row-hint"></span>
+        </div>
+
+        <div class="qc-existing hidden" id="qc-existing">
+          <span class="qc-existing-label">Last QC:</span>
+          <span class="qc-status-badge" id="qc-existing-status"></span>
+          <span class="qc-existing-meta" id="qc-existing-meta"></span>
+          <button class="btn ghost" id="qc-show-existing">Show details</button>
+        </div>
+
+        <div class="qc-running hidden" id="qc-running">
+          <div class="workflow qc-workflow" id="qc-workflow">
+            {% for stage in qc_stages %}
+            <div class="stage" data-qc-stage="{{ stage.key }}">
+              <div class="stage-index">{{ loop.index }}</div>
+              <div class="stage-label">{{ stage.label }}</div>
+              <div class="stage-task"><code>{{ stage.task }}</code></div>
+            </div>
+            {% if not loop.last %}<div class="stage-arrow">→</div>{% endif %}
+            {% endfor %}
+          </div>
+          <div class="progress-wrap">
+            <div class="progress-bar"><div class="progress-fill" id="qc-progress-fill"></div></div>
+            <div class="progress-label" id="qc-progress-label">Starting QC…</div>
+          </div>
+          <div class="log-feed qc-log-feed" id="qc-log-feed" aria-live="polite"></div>
+        </div>
+
+        <div class="qc-report hidden" id="qc-report"></div>
+      </section>
     </section>
   </main>
 
